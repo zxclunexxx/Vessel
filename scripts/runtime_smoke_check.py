@@ -12,6 +12,7 @@ banned = [
     "prompt(",
     "confirm(",
     "alert(",
+    "`${user.id}/${crypto.randomUUID()}-${safeName}`",
 ]
 found = [item for item in banned if item in main]
 if found:
@@ -36,6 +37,10 @@ required = [
     'id="mobile-nav"',
     "createSignedUrl(path,60)",
     "activeChannelName = 'нет каналов'",
+    "context=`dm/${activeDmId}`",
+    "context=`channel/${activeChannelId}`",
+    'async function cleanupFailedAttachment(attachment)',
+    '25*1024*1024',
 ]
 for item in required:
     if item not in main:
