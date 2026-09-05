@@ -77,3 +77,74 @@ $$;
 drop trigger if exists create_default_channel on servers;
 create trigger create_default_channel after insert on servers
 for each row execute function vessel_create_default_channel();
+
+-- Friends and direct messages.
+create table if not exists public.friend_requests (
+  id uuid primary key default gen_random_uuid(),
+  sender_id uuid not null references public.profiles(id) on delete cascade,
+  receiver_id uuid not null references public.profiles(id) on delete cascade,
+  status text not null default 'pending' check (status in ('pending','accepted','declined','cancelled')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(sender_id, receiver_id),
+  check (sender_id <> receiver_id)
+);
+
+create table if not exists public.friendships (
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  friend_id uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (user_id, friend_id),
+  check (user_id <> friend_id)
+);
+
+create table if not exists public.direct_messages (
+  id uuid primary key default gen_random_uuid(),
+  sender_id uuid not null references public.profiles(id) on delete cascade,
+  receiver_id uuid not null references public.profiles(id) on delete cascade,
+  body text not null check (char_length(body) between 1 and 4000),
+  created_at timestamptz not null default now(),
+  edited_at timestamptz,
+  deleted_at timestamptz,
+  check (sender_id <> receiver_id)
+);
+
+create index if not exists friend_requests_receiver_status_idx on public.friend_requests(receiver_id, status);
+create index if not exists friendships_friend_idx on public.friendships(friend_id);
+create index if not exists direct_messages_pair_created_idx on public.direct_messages(sender_id, receiver_id, created_at);
+
+alter table public.friend_requests enable row level security;
+alter table public.friendships enable row level security;
+alter table public.direct_messages enable row level security;
+
+drop policy if exists "friend requests participants can read" on public.friend_requests;
+create policy "friend requests participants can read" on public.friend_requests for select to authenticated
+using ((select auth.uid()) = sender_id or (select auth.uid()) = receiver_id);
+drop policy if exists "users can send friend requests" on public.friend_requests;
+create policy "users can send friend requests" on public.friend_requests for insert to authenticated
+with check ((select auth.uid()) = sender_id and sender_id <> receiver_id);
+drop policy if exists "request participants can update" on public.friend_requests;
+create policy "request participants can update" on public.friend_requests for update to authenticated
+using ((select auth.uid()) = sender_id or (select auth.uid()) = receiver_id)
+with check ((select auth.uid()) = sender_id or (select auth.uid()) = receiver_id);
+
+drop policy if exists "friends can read friendships" on public.friendships;
+create policy "friends can read friendships" on public.friendships for select to authenticated
+using ((select auth.uid()) = user_id or (select auth.uid()) = friend_id);
+drop policy if exists "users can create friendship links" on public.friendships;
+create policy "users can create friendship links" on public.friendships for insert to authenticated
+with check ((select auth.uid()) = user_id or (select auth.uid()) = friend_id);
+drop policy if exists "friends can delete friendship links" on public.friendships;
+create policy "friends can delete friendship links" on public.friendships for delete to authenticated
+using ((select auth.uid()) = user_id or (select auth.uid()) = friend_id);
+
+drop policy if exists "dm participants can read" on public.direct_messages;
+create policy "dm participants can read" on public.direct_messages for select to authenticated
+using ((select auth.uid()) = sender_id or (select auth.uid()) = receiver_id);
+drop policy if exists "users can send dms" on public.direct_messages;
+create policy "users can send dms" on public.direct_messages for insert to authenticated
+with check ((select auth.uid()) = sender_id);
+drop policy if exists "senders can update dms" on public.direct_messages;
+create policy "senders can update dms" on public.direct_messages for update to authenticated
+using ((select auth.uid()) = sender_id)
+with check ((select auth.uid()) = sender_id);
