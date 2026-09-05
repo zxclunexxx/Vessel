@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   patch-and-build:
@@ -28,8 +29,10 @@ jobs:
       - name: Verify production build
         run: npm run build
       - name: Commit verified changes
+        id: commit
         run: |
           if git diff --quiet -- src/main.js src/style.css; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No generated changes"
             exit 0
           fi
@@ -38,3 +41,13 @@ jobs:
           git add src/main.js src/style.css
           git commit -m "Apply verified Vessel UX and reliability improvements"
           git push
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      - name: Dispatch checks and distributable builds for generated commit
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run quality.yml --ref main
+          gh workflow run web-pages.yml --ref main
+          gh workflow run android-apk.yml --ref main
+          gh workflow run windows-exe.yml --ref main
