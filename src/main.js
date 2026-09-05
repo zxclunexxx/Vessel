@@ -11,7 +11,9 @@ let activeServerIndex = Number(localStorage.getItem('vesselActiveServer') || 0);
 let activeChannelName = 'общий';
 let activeChannelKind = 'text';
 let currentDm = null;
+let activeDmId = null;
 let friendsOpen = false;
+let friends = [];
 const savedChannelMap = JSON.parse(localStorage.getItem('vesselChannelMap') || '{}');
 async function syncSupabaseMessages() {
   if (!supabase || window.__vesselDbLoaded) return;
@@ -33,6 +35,16 @@ async function syncSupabaseChannels() {
   const {data} = await supabase.from('channels').select('id,name,kind').order('position');
   if (data?.length) { dbChannels=data; activeChannelId=data[0].id; render(); }
   window.__vesselChannelsLoaded=true;
+}
+async function syncSocial(user) {
+  if (!supabase || !user?.id || window.__vesselSocialLoaded) return;
+  const {data: links} = await supabase.from('friendships').select('friend_id').eq('user_id', user.id);
+  const ids = (links || []).map(row => row.friend_id).filter(Boolean);
+  if (ids.length) {
+    const {data: profiles} = await supabase.from('profiles').select('id,username,avatar_color,status').in('id', ids);
+    friends = profiles || [];
+  }
+  window.__vesselSocialLoaded = true;
 }
 
 let servers = JSON.parse(localStorage.getItem('vesselServers') || 'null') || [
@@ -82,12 +94,12 @@ function render() {
         <div class="auth-divider"><span>или</span></div><button class="ghost" type="button" id="demo-login">Войти в демо-режим</button><button class="auth-switch" type="button" id="auth-switch">У меня уже есть аккаунт</button><small>Продолжая, ты принимаешь правила Vessel</small>
       </section></main>`;
     document.querySelector('.auth-form').addEventListener('submit', async e => { e.preventDefault(); const data = new FormData(e.currentTarget); const payload={name:data.get('name'),email:data.get('email'),password:data.get('password')}; try { if (!supabase) throw new Error(); const {data:result,error}=await supabase.auth.signUp({email:payload.email,password:payload.password,data:{username:payload.name}}); if(error) throw error; localStorage.setItem('vesselToken',result.session?.access_token||'pending'); localStorage.setItem('vesselUser', JSON.stringify({id:result.user?.id,name:payload.name,email:payload.email})); location.reload(); } catch { localStorage.setItem('vesselUser', JSON.stringify({name:payload.name,email:payload.email})); location.reload(); } });
-    document.querySelector('#demo-login').addEventListener('click', () => { localStorage.setItem('vesselUser', JSON.stringify({name:'Артём', email:'demo@vessel.app'})); location.reload(); });
-    document.querySelector('#auth-switch').addEventListener('click', () => { const form=document.querySelector('.auth-form'); form.innerHTML='<label>Электронная почта<input name="email" type="email" required placeholder="you@example.com" /></label><label>Пароль<input name="password" type="password" required minlength="4" placeholder="Твой пароль" /></label><button class="primary" type="submit">Войти <span>→</span></button>'; form.onsubmit=async e=>{e.preventDefault();const d=new FormData(form);try{const {data,error}=await supabase.auth.signInWithPassword({email:d.get('email'),password:d.get('password')});if(error)throw error;localStorage.setItem('vesselToken',data.session.access_token);localStorage.setItem('vesselUser',JSON.stringify({name:data.user.user_metadata.username||data.user.email.split('@')[0],email:data.user.email}));location.reload();}catch{alert('Не удалось войти. Проверь почту и пароль.');}}; });
+    document.querySelector('#demo-login').addEventListener('click', () => { localStorage.setItem('vesselUser', JSON.stringify({id:null,name:'Артём', email:'demo@vessel.app'})); location.reload(); });
+    document.querySelector('#auth-switch').addEventListener('click', () => { const form=document.querySelector('.auth-form'); form.innerHTML='<label>Электронная почта<input name="email" type="email" required placeholder="you@example.com" /></label><label>Пароль<input name="password" type="password" required minlength="4" placeholder="Твой пароль" /></label><button class="primary" type="submit">Войти <span>→</span></button>'; form.onsubmit=async e=>{e.preventDefault();const d=new FormData(form);try{const {data,error}=await supabase.auth.signInWithPassword({email:d.get('email'),password:d.get('password')});if(error)throw error;localStorage.setItem('vesselToken',data.session.access_token);localStorage.setItem('vesselUser',JSON.stringify({id:data.user.id,name:data.user.user_metadata.username||data.user.email.split('@')[0],email:data.user.email}));location.reload();}catch{alert('Не удалось войти. Проверь почту и пароль.');}}; });
     return;
   }
   const user = JSON.parse(localStorage.getItem('vesselUser'));
-  connectRealtime(); syncSupabaseMessages(); syncSupabaseServers(user); syncSupabaseChannels();
+  connectRealtime(); syncSupabaseMessages(); syncSupabaseServers(user); syncSupabaseChannels(); syncSocial(user);
   document.querySelector('#app').innerHTML = `
     <main class="shell">
       <aside class="servers"><button class="server home-tab ${friendsOpen?'selected':''}" id="friends-tab" title="Друзья">👥</button>${servers.map((s,i) => `<button class="server ${!friendsOpen&&i===activeServerIndex?'selected':''} ${s.add ? 'add' : ''}" data-server-index="${i}" title="${s.name}">${s.icon}</button>`).join('')}</aside>
@@ -105,7 +117,7 @@ function render() {
       </aside>
       <section class="chat">
         <header class="chat-head"><div><h1><span>${currentDm?'@':activeChannelKind==='voice'?'⌁':'#'}</span> ${currentDm || activeChannelName}</h1><p>${currentDm?'Личная переписка':activeChannelKind==='voice'?'Голосовая комната':servers[activeServerIndex]?.name || 'Vessel'}</p></div><div class="head-actions"><button id="audio-call" title="Аудиозвонок">📞</button><button id="video-call" title="Видеозвонок">🎥</button><button id="join-voice" class="join-voice ${activeChannelKind==='voice'?'':'hidden'}">${voiceStream?'Выйти':'Войти'}</button><button id="mute-voice" class="join-voice ${voiceStream?'':'hidden'}">🎙</button><button id="camera-voice" class="join-voice ${voiceStream?'':'hidden'}">📷</button><button id="search-button">⌕</button><button id="friends-button" title="Друзья">♧</button><button id="notifications">🔔</button><button id="head-settings">⚙</button></div></header>
-        <video id="local-video" class="local-video ${voiceStream?'':'hidden'}" autoplay muted playsinline></video><div class="messages">${friendsOpen?`<div class="friends-view"><div class="friends-hero"><h2>Друзья</h2><button id="add-friend" class="primary">Добавить друга</button></div><div class="friend-row"><div class="avatar" style="background:#8b7cff">М</div><b>Марк</b><span>В сети</span><button data-dm="Марк">💬</button><button data-call="Марк">📞</button></div><div class="friend-row"><div class="avatar" style="background:#ff7294">Л</div><b>Лиза</b><span>В сети</span><button data-dm="Лиза">💬</button><button data-call="Лиза">📞</button></div></div>`:`<div class="welcome"><div class="welcome-icon">${currentDm?'@':activeChannelKind==='voice'?'⌁':'#'}</div><h2>${currentDm?`Переписка с ${currentDm}`:`Добро пожаловать в ${activeChannelKind==='voice'?'':'#'}${activeChannelName}!`}</h2><p>${activeChannelKind==='voice'?'Подключись к комнате, чтобы общаться голосом.':'Здесь начинается ваше общение.'}</p></div>${messages.map(m => `<article class="message"><div class="avatar" style="background:${m.color}">${m.name[0]}</div><div><div class="message-meta"><b>${m.name}</b><time>${m.time}</time></div><p>${m.text}</p></div></article>`).join('')}`}</div>
+        <video id="local-video" class="local-video ${voiceStream?'':'hidden'}" autoplay muted playsinline></video><div class="messages">${friendsOpen?`<div class="friends-view"><div class="friends-hero"><h2>Друзья</h2><button id="add-friend" class="primary">Найти пользователя</button></div>${friends.length ? friends.map(friend=>`<div class="friend-row"><div class="avatar" style="background:${friend.avatar_color||'#8b7cff'}">${friend.username[0].toUpperCase()}</div><b>${friend.username}</b><span>${friend.status||'в сети'}</span><button data-dm-id="${friend.id}" data-dm="${friend.username}">💬</button><button data-call="${friend.username}">📞</button></div>`).join('') : `<p class="empty-state">Пока нет добавленных друзей. Нажми «Найти пользователя».</p>`}</div>`:`<div class="welcome"><div class="welcome-icon">${currentDm?'@':activeChannelKind==='voice'?'⌁':'#'}</div><h2>${currentDm?`Переписка с ${currentDm}`:`Добро пожаловать в ${activeChannelKind==='voice'?'':'#'}${activeChannelName}!`}</h2><p>${activeChannelKind==='voice'?'Подключись к комнате, чтобы общаться голосом.':'Здесь начинается ваше общение.'}</p></div>${messages.map(m => `<article class="message"><div class="avatar" style="background:${m.color}">${m.name[0]}</div><div><div class="message-meta"><b>${m.name}</b><time>${m.time}</time></div><p>${m.text}</p></div></article>`).join('')}`}</div>
         <form class="composer ${friendsOpen?'hidden':''}"><button type="button" class="attach">＋</button><input placeholder="${currentDm?`Написать пользователю ${currentDm}`:`Написать в #${activeChannelName}`}" /><button type="button">☺</button><button type="submit" class="send">➤</button></form>
       </section>
       <aside class="members">${voiceStream?'<div class="voice-status">🎙 Ты в голосовой комнате</div>':''}<div class="members-title">УЧАСТНИКИ — 3</div><div class="member online"><div class="avatar" style="background:#8b7cff">М</div><span>Марк<small>Создатель</small></span><i></i></div><div class="member online"><div class="avatar" style="background:#ff7294">Л</div><span>Лиза<small>Дизайнер</small></span><i></i></div><div class="member online"><div class="avatar" style="background:#39d9a6">А</div><span>Артём<small>В сети</small></span><i></i></div></aside>
@@ -123,7 +135,7 @@ function render() {
   const addChannel = async kind => { const name=prompt(kind==='voice'?'Название голосовой комнаты:':'Название нового канала:'); if(!name?.trim()) return; const server=servers[activeServerIndex]; const channels=serverChannels(); const created={name:name.trim(),kind}; savedChannelMap[server.id]=[...channels,created]; saveChannelMap(); activeChannelName=created.name; activeChannelKind=kind; currentDm=null; if(supabase&&user.id&&server.dbId){ await supabase.from('channels').insert({server_id:server.dbId,name:created.name,kind,position:channels.length}); } render(); };
   document.querySelector('#channel-add').addEventListener('click', () => addChannel('text'));
   document.querySelector('#voice-add').addEventListener('click', () => addChannel('voice'));
-  document.querySelector('#dm-add').addEventListener('click', () => { const name=prompt('Имя пользователя:'); if(name?.trim()){currentDm=name.trim();friendsOpen=false;render();} });
+  document.querySelector('#dm-add').addEventListener('click', () => { const name=prompt('Имя пользователя:'); if(name?.trim()){currentDm=name.trim();activeDmId=null;friendsOpen=false;render();} });
   document.querySelector('#close-settings').addEventListener('click', () => modal.classList.add('hidden'));
   document.querySelector('#settings-form').addEventListener('submit', e => { e.preventDefault(); const data=new FormData(e.currentTarget); localStorage.setItem('vesselUser', JSON.stringify({name:data.get('name'),email:user.email,status:data.get('status')})); location.reload(); });
   document.querySelector('#logout').addEventListener('click', () => { localStorage.removeItem('vesselUser'); location.reload(); });
@@ -141,8 +153,8 @@ function render() {
   document.querySelector('#friends-tab').addEventListener('click',()=>{friendsOpen=true;currentDm=null;render();});
   document.querySelector('#friends-button').addEventListener('click',()=>{friendsOpen=true;currentDm=null;render();});
   document.querySelector('#head-settings').addEventListener('click',()=>modal.classList.remove('hidden'));
-  document.querySelectorAll('[data-dm]').forEach(button=>button.addEventListener('click',()=>{currentDm=button.dataset.dm;friendsOpen=false;render();}));
-  document.querySelector('#add-friend')?.addEventListener('click',()=>{const name=prompt('Имя или почта друга:');if(name?.trim())alert(`Запрос пользователю ${name.trim()} отправлен`);});
+  document.querySelectorAll('[data-dm]').forEach(button=>button.addEventListener('click',()=>{currentDm=button.dataset.dm;activeDmId=button.dataset.dmId||null;friendsOpen=false;render();}));
+  document.querySelector('#add-friend')?.addEventListener('click',async()=>{const query=prompt('Введи точное имя пользователя:');if(!query?.trim())return;if(!supabase||!user.id){alert('Войди через настоящий аккаунт, чтобы добавлять друзей.');return;}const {data:found}=await supabase.from('profiles').select('id,username').ilike('username',query.trim()).limit(1);if(!found?.[0]){alert('Пользователь не найден.');return;}if(found[0].id===user.id){alert('Нельзя добавить самого себя.');return;}const {error}=await supabase.from('friend_requests').upsert({sender_id:user.id,receiver_id:found[0].id,status:'pending'},{onConflict:'sender_id,receiver_id'});alert(error?'Не удалось отправить заявку.':`Заявка пользователю ${found[0].username} отправлена.`);});
   async function startCall(video) { try { if(voiceStream){voiceStream.getTracks().forEach(t=>t.stop());voiceStream=null;render();return;} voiceStream=await navigator.mediaDevices.getUserMedia({audio:true,video}); render(); alert(`${video?'Видеозвонок':'Аудиозвонок'} начат. Для разговора с другим телефоном собеседник должен войти в эту же комнату.`); } catch { alert('Разреши Vessel доступ к микрофону и камере.'); } }
   document.querySelector('#audio-call').addEventListener('click',()=>startCall(false));
   document.querySelector('#video-call').addEventListener('click',()=>startCall(true));
