@@ -1,100 +1,156 @@
 from pathlib import Path
-import re
 
 path = Path('src/main.js')
 text = path.read_text(encoding='utf-8')
 
-# Expose a lightweight owner-only channel settings control in the header.
-old = """  const callInProgress=Boolean(callConnection||callStream);
-  const callActions=callInProgress"""
-new = """  const callInProgress=Boolean(callConnection||callStream);
-  const activeServer=servers[activeServerIndex];
-  const canManageChannel=Boolean(!currentDm&&activeChannelId&&activeServer?.dbId&&activeServer.role==='owner');
-  const callActions=callInProgress"""
+old = """let voiceStream = null;
+let voiceRoom = null;"""
+new = """let voiceStream = null;
+let voiceRoom = null;
+let voiceChannelId = null;
+let voiceParticipants = [];
+const voicePeers = new Map();"""
 if old not in text:
-    raise SystemExit('render call state anchor not found')
+    raise SystemExit('voice globals anchor not found')
 text = text.replace(old, new, 1)
 
-old = '<div class="head-actions">${callActions}'
-new = '<div class="head-actions">${canManageChannel?`<button id="channel-settings" title="Настройки канала">•••</button>`:\'\'}${callActions}'
-if old not in text:
-    raise SystemExit('head actions anchor not found')
-text = text.replace(old, new, 1)
+anchor = """function callRoomName(a,b) { return `vessel-call-${[a,b].sort().join('-')}`; }"""
+helpers = r'''function removeVoicePeer(peerId) {
+  const state=voicePeers.get(peerId);
+  if(!state)return;
+  try{state.pc.close();}catch{}
+  state.audio?.remove();
+  voicePeers.delete(peerId);
+}
 
-# Replace the old invite-only server menu. Anchor to the next declaration so formatting changes do not break the patch.
-server_menu = """  document.querySelector('.more').addEventListener('click', async () => {
-    const server=servers[activeServerIndex];
-    if(!server?.dbId){alert('Сначала выбери сервер.');return;}
-    if(server.role==='owner'){
-      const action=prompt('Управление сервером:\\n1 — создать приглашение\\n2 — переименовать сервер\\n3 — удалить сервер');
-      if(action==='1'){
-        const code=`VSL-${crypto.randomUUID().slice(0,8).toUpperCase()}`;
-        const {error}=await supabase.from('server_invites').insert({server_id:server.dbId,created_by:user.id,code});
-        alert(error?`Не удалось создать приглашение: ${error.message}`:`Код приглашения для сервера «${server.name}»:\\n\\n${code}\\n\\nПередай его другу.`);
-        return;
-      }
-      if(action==='2'){
-        const name=prompt('Новое название сервера:',server.name);
-        if(!name?.trim()||name.trim()===server.name)return;
-        const {error}=await supabase.from('servers').update({name:name.trim()}).eq('id',server.dbId).eq('owner_id',user.id);
-        if(error){alert(`Не удалось переименовать сервер: ${error.message}`);return;}
-        server.name=name.trim(); render(); return;
-      }
-      if(action==='3'){
-        if(!confirm(`Удалить сервер «${server.name}» вместе с каналами и сообщениями?`))return;
-        const {error}=await supabase.from('servers').delete().eq('id',server.dbId).eq('owner_id',user.id);
-        if(error){alert(`Не удалось удалить сервер: ${error.message}`);return;}
-        window.__vesselServersLoaded=false; activeServerIndex=0; activeChannelId=null; currentDm=null; activeDmId=null; messages=[]; serverMembers=[]; window.__vesselMembersServerId=null;
-        await syncSupabaseServers(user);
-        const next=servers[activeServerIndex];
-        if(next?.dbId){next.__channelsLoaded=false;await syncSupabaseChannels(next);await syncServerMembers(user,next);} else render();
-        return;
-      }
-      return;
-    }
-    if(confirm(`Выйти из сервера «${server.name}»?`)){
-      const {error}=await supabase.from('server_members').delete().eq('server_id',server.dbId).eq('user_id',user.id);
-      if(error){alert(`Не удалось выйти из сервера: ${error.message}`);return;}
-      window.__vesselServersLoaded=false; activeServerIndex=0; activeChannelId=null; currentDm=null; activeDmId=null; messages=[]; serverMembers=[]; window.__vesselMembersServerId=null;
-      await syncSupabaseServers(user);
-      const next=servers[activeServerIndex];
-      if(next?.dbId){next.__channelsLoaded=false;await syncSupabaseChannels(next);await syncServerMembers(user,next);} else render();
-    }
-  });
-  const addChannel"""
-pattern = r"  document\.querySelector\('\.more'\)\.addEventListener\('click', async \(\) => \{.*?\}\);\n  const addChannel"
-text, n = re.subn(pattern, lambda m: server_menu, text, count=1, flags=re.S)
-if n != 1:
-    raise SystemExit(f'server menu listener replacement count={n}')
+async function sendVoiceSignal(user,peerId,signal){
+  if(!voiceRoom||!user?.id||!peerId)return;
+  await voiceRoom.send({type:'broadcast',event:'voice-signal',payload:{from:user.id,to:peerId,signal}});
+}
 
-anchor = """  document.querySelector('#voice-add').addEventListener('click', () => addChannel('voice'));"""
-addition = """  document.querySelector('#voice-add').addEventListener('click', () => addChannel('voice'));
-  document.querySelector('#channel-settings')?.addEventListener('click',async()=>{
-    const server=servers[activeServerIndex];
-    if(!server?.dbId||server.role!=='owner'||!activeChannelId)return;
-    const channel=serverChannels().find(item=>item.id===activeChannelId);
-    if(!channel)return;
-    const action=prompt(`Канал «${channel.name}»:\\n1 — переименовать\\n2 — удалить`);
-    if(action==='1'){
-      const name=prompt('Новое название канала:',channel.name);
-      if(!name?.trim()||name.trim()===channel.name)return;
-      const {error}=await supabase.from('channels').update({name:name.trim()}).eq('id',channel.id).eq('server_id',server.dbId);
-      if(error){alert(`Не удалось переименовать канал: ${error.message}`);return;}
-      server.__channelsLoaded=false;
-      await syncSupabaseChannels(server);
-      activeChannelId=channel.id; activeChannelName=name.trim(); render();
-      return;
-    }
-    if(action==='2'){
-      if(!confirm(`Удалить канал «${channel.name}»?`))return;
-      const {error}=await supabase.from('channels').delete().eq('id',channel.id).eq('server_id',server.dbId);
-      if(error){alert(`Не удалось удалить канал: ${error.message}`);return;}
-      activeChannelId=null; messages=[]; server.__channelsLoaded=false; await syncSupabaseChannels(server);
-    }
-  });"""
+async function ensureVoicePeer(user,peerId,initiator=false){
+  if(!user?.id||!peerId||peerId===user.id)return null;
+  let state=voicePeers.get(peerId);
+  if(state)return state;
+  const pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+  state={pc,pending:[],audio:null};
+  voicePeers.set(peerId,state);
+  voiceStream?.getAudioTracks().forEach(track=>pc.addTrack(track,voiceStream));
+  pc.onicecandidate=event=>{if(event.candidate)sendVoiceSignal(user,peerId,{type:'ice',candidate:event.candidate}).catch(()=>{});};
+  pc.ontrack=event=>{
+    let audio=state.audio;
+    if(!audio){audio=document.createElement('audio');audio.autoplay=true;audio.playsInline=true;audio.dataset.voicePeer=peerId;audio.style.display='none';document.body.appendChild(audio);state.audio=audio;}
+    audio.srcObject=event.streams[0];audio.play().catch(()=>{});
+  };
+  pc.onconnectionstatechange=()=>{if(['failed','closed'].includes(pc.connectionState))removeVoicePeer(peerId);};
+  if(initiator){
+    const offer=await pc.createOffer();await pc.setLocalDescription(offer);await sendVoiceSignal(user,peerId,{type:'offer',description:{type:pc.localDescription.type,sdp:pc.localDescription.sdp}});
+  }
+  return state;
+}
+
+async function handleVoiceSignal(user,payload){
+  if(!payload||payload.to!==user?.id||payload.from===user.id)return;
+  const {from,signal}=payload;
+  if(!signal)return;
+  const state=await ensureVoicePeer(user,from,false);
+  if(!state)return;
+  const {pc}=state;
+  if(signal.type==='offer'){
+    await pc.setRemoteDescription(signal.description);
+    for(const candidate of state.pending.splice(0))await pc.addIceCandidate(candidate);
+    const answer=await pc.createAnswer();await pc.setLocalDescription(answer);await sendVoiceSignal(user,from,{type:'answer',description:{type:pc.localDescription.type,sdp:pc.localDescription.sdp}});return;
+  }
+  if(signal.type==='answer'){
+    await pc.setRemoteDescription(signal.description);
+    for(const candidate of state.pending.splice(0))await pc.addIceCandidate(candidate);
+    return;
+  }
+  if(signal.type==='ice'){
+    if(pc.remoteDescription)await pc.addIceCandidate(signal.candidate);else state.pending.push(signal.candidate);
+  }
+}
+
+async function syncVoicePresence(user){
+  if(!voiceRoom||!user?.id)return;
+  const entries=Object.values(voiceRoom.presenceState()||{}).flat();
+  voiceParticipants=entries.filter(item=>item?.user_id).map(item=>({id:item.user_id,name:item.name||'Участник'}));
+  const ids=new Set(voiceParticipants.map(item=>item.id).filter(id=>id!==user.id));
+  for(const peerId of ids){
+    if(!voicePeers.has(peerId))await ensureVoicePeer(user,peerId,String(user.id)<String(peerId));
+  }
+  for(const peerId of [...voicePeers.keys()])if(!ids.has(peerId))removeVoicePeer(peerId);
+  const status=document.querySelector('.voice-status');
+  if(status)status.textContent=`🎙 В голосовой комнате: ${Math.max(1,voiceParticipants.length)}`;
+}
+
+async function leaveVoiceRoom(){
+  voiceStream?.getTracks().forEach(track=>track.stop());voiceStream=null;
+  for(const peerId of [...voicePeers.keys()])removeVoicePeer(peerId);
+  voiceParticipants=[];voiceChannelId=null;
+  if(voiceRoom&&supabase){try{await supabase.removeChannel(voiceRoom);}catch{}}
+  voiceRoom=null;
+  render();
+}
+
+async function toggleVoiceRoom(user){
+  if(voiceStream){await leaveVoiceRoom();return;}
+  if(!supabase||!user?.id||!activeChannelId||activeChannelKind!=='voice'){alert('Сначала открой голосовой канал.');return;}
+  try{
+    voiceStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+    voiceChannelId=activeChannelId;
+    voiceRoom=supabase.channel(`voice-${voiceChannelId}`,{config:{presence:{key:user.id}}});
+    voiceRoom.on('broadcast',{event:'voice-signal'},({payload})=>handleVoiceSignal(user,payload).catch(error=>console.warn('Voice signal failed',error)));
+    voiceRoom.on('presence',{event:'sync'},()=>syncVoicePresence(user).catch(error=>console.warn('Voice presence failed',error)));
+    voiceRoom.subscribe(async status=>{if(status==='SUBSCRIBED'){await voiceRoom.track({user_id:user.id,name:user.name});await syncVoicePresence(user);}});
+    render();
+  }catch(error){
+    console.warn('Voice join failed',error);voiceStream?.getTracks().forEach(track=>track.stop());voiceStream=null;voiceRoom=null;voiceChannelId=null;alert('Разреши Vessel доступ к микрофону.');
+  }
+}
+
+function toggleVoiceMicrophone(){
+  const track=voiceStream?.getAudioTracks()[0];if(!track)return;track.enabled=!track.enabled;render();
+}
+
+function callRoomName(a,b) { return `vessel-call-${[a,b].sort().join('-')}`; }'''
 if anchor not in text:
-    raise SystemExit('voice add listener anchor not found')
-text = text.replace(anchor, addition, 1)
+    raise SystemExit('call helper anchor not found')
+text = text.replace(anchor, helpers, 1)
+
+# Audio-only voice rooms should not render a blank local video tile.
+old = """<video id=\"remote-video\" class=\"remote-video ${remoteCallStream?'':'hidden'}\" autoplay playsinline></video><video id=\"local-video\" class=\"local-video ${voiceStream||callStream?'':'hidden'}\" autoplay muted playsinline></video>"""
+new = """<video id=\"remote-video\" class=\"remote-video ${remoteCallStream?'':'hidden'}\" autoplay playsinline></video><video id=\"local-video\" class=\"local-video ${callStream||voiceStream?.getVideoTracks().length?'':'hidden'}\" autoplay muted playsinline></video>"""
+if old not in text:
+    raise SystemExit('local video visibility anchor not found')
+text = text.replace(old, new, 1)
+
+old = """<button id=\"join-voice\" class=\"join-voice ${activeChannelKind==='voice'?'':'hidden'}\">${voiceStream?'Выйти':'Войти'}</button><button id=\"mute-voice\" class=\"join-voice ${voiceStream?'':'hidden'}\">🎙</button><button id=\"camera-voice\" class=\"join-voice ${voiceStream?'':'hidden'}\">📷</button>"""
+new = """<button id=\"join-voice\" class=\"join-voice ${activeChannelKind==='voice'?'':'hidden'}\">${voiceStream?'Выйти':'Войти'}</button><button id=\"mute-voice\" class=\"join-voice ${voiceStream?'':'hidden'}\">${voiceStream?.getAudioTracks()[0]?.enabled===false?'🔇':'🎙'}</button>"""
+if old not in text:
+    raise SystemExit('voice controls markup anchor not found')
+text = text.replace(old, new, 1)
+
+old = """${voiceStream?'<div class=\"voice-status\">🎙 Ты в голосовой комнате</div>':''}${membersList}"""
+new = """${voiceStream?`<div class=\"voice-status\">🎙 В голосовой комнате: ${Math.max(1,voiceParticipants.length)}</div>`:''}${membersList}"""
+if old not in text:
+    raise SystemExit('voice status anchor not found')
+text = text.replace(old, new, 1)
+
+# Replace the prototype presence-only voice handler with the mesh voice-room controls.
+start = """    const voiceButton=document.querySelector('#join-voice'), muteButton=document.querySelector('#mute-voice'), cameraButton=document.querySelector('#camera-voice'); if(channel.textContent.includes('⌁')&&!isDm) {"""
+end = """ } else {voiceButton.classList.add('hidden');muteButton.classList.add('hidden');cameraButton.classList.add('hidden');}"""
+idx=text.find(start)
+if idx<0:raise SystemExit('prototype voice handler start not found')
+end_idx=text.find(end,idx)
+if end_idx<0:raise SystemExit('prototype voice handler end not found')
+end_idx += len(end)
+replacement = """    const voiceButton=document.querySelector('#join-voice'), muteButton=document.querySelector('#mute-voice');
+    if(channel.textContent.includes('⌁')&&!isDm){
+      voiceButton.classList.remove('hidden');voiceButton.textContent=voiceStream?'Выйти':'Подключиться';voiceButton.onclick=()=>toggleVoiceRoom(user);
+      if(voiceStream){muteButton.classList.remove('hidden');muteButton.onclick=toggleVoiceMicrophone;}else muteButton.classList.add('hidden');
+    }else{voiceButton.classList.add('hidden');muteButton.classList.add('hidden');}"""
+text = text[:idx] + replacement + text[end_idx:]
 
 path.write_text(text, encoding='utf-8')
-print('Applied server and channel management patch')
+print('Applied functional voice room mesh patch')
