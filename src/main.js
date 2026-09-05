@@ -661,7 +661,7 @@ function render() {
     ? friends.map(friend=>`<button class="channel dm ${activeDmId===friend.id?'active':''}" data-dm-id="${friend.id}" data-dm="${escapeHtml(friend.username)}"><div class="mini-avatar" style="background:${friend.avatar_color||'#8b7cff'}">${(friend.username||'?')[0].toUpperCase()}</div> ${escapeHtml(friend.username)} <em></em></button>`).join('')
     : `<div class="dm-empty">Пока нет личных чатов</div>`;
   const membersList=serverMembers.length
-    ? `<div class="members-title">УЧАСТНИКИ — ${serverMembers.length}</div>${serverMembers.map(member=>`<div class="member online"><div class="avatar" style="background:${member.avatar_color}">${member.username[0]?.toUpperCase()||'?'}</div><span>${member.username}<small>${member.role==='owner'?'Создатель':member.status}</small></span><i></i></div>`).join('')}`
+    ? `<div class="members-title">УЧАСТНИКИ — ${serverMembers.length}</div>${serverMembers.map(member=>`<div class="member online"><div class="avatar" style="background:${escapeHtml(member.avatar_color||'#8b7cff')}">${escapeHtml(member.username[0]?.toUpperCase()||'?')}</div><span>${escapeHtml(member.username)}<small>${member.role==='owner'?'Создатель':member.role==='moderator'?'Модератор':escapeHtml(member.status)}</small></span>${activeServer?.role==='owner'&&member.role!=='owner'?`<button class="member-manage" data-manage-member="${member.id}" title="Управление участником">•••</button>`:'<i></i>'}</div>`).join('')}`
     : `<div class="members-title">УЧАСТНИКИ</div><div class="dm-empty">Список загружается…</div>`;
   document.querySelector('#app').innerHTML = `
     <main class="shell">
@@ -813,6 +813,29 @@ function render() {
   document.querySelector('#friends-tab').addEventListener('click',()=>{friendsOpen=true;currentDm=null;render();});
   document.querySelector('#friends-button').addEventListener('click',()=>{friendsOpen=true;currentDm=null;render();});
   document.querySelector('#head-settings').addEventListener('click',()=>modal.classList.remove('hidden'));
+  document.querySelectorAll('[data-manage-member]').forEach(button=>button.addEventListener('click',async()=>{
+    const server=servers[activeServerIndex];
+    if(!supabase||!user.id||server?.role!=='owner')return;
+    const memberId=button.dataset.manageMember;
+    const member=serverMembers.find(item=>item.id===memberId);
+    if(!member)return;
+    const action=prompt(`Участник ${member.username}:
+1 — сделать участником
+2 — сделать модератором
+3 — исключить из сервера`);
+    if(action==='1'||action==='2'){
+      const role=action==='2'?'moderator':'member';
+      const {error}=await supabase.from('server_members').update({role}).eq('server_id',server.dbId).eq('user_id',memberId);
+      if(error){alert(`Не удалось изменить роль: ${error.message}`);return;}
+      window.__vesselMembersServerId=null;serverMembers=[];await syncServerMembers(user,server);render();return;
+    }
+    if(action==='3'){
+      if(!confirm(`Исключить ${member.username} из сервера?`))return;
+      const {error}=await supabase.from('server_members').delete().eq('server_id',server.dbId).eq('user_id',memberId);
+      if(error){alert(`Не удалось исключить участника: ${error.message}`);return;}
+      window.__vesselMembersServerId=null;serverMembers=[];await syncServerMembers(user,server);render();
+    }
+  }));
   document.querySelectorAll('[data-dm]').forEach(button=>button.addEventListener('click',()=>{currentDm=button.dataset.dm;activeDmId=button.dataset.dmId||null;friendsOpen=false;window.__vesselDmLoaded=false;render();}));
   document.querySelectorAll('[data-attachment-path]').forEach(button=>button.addEventListener('click',()=>openAttachment(button.dataset.attachmentPath)));
   document.querySelectorAll('[data-remove-friend]').forEach(button=>button.addEventListener('click',async()=>{
