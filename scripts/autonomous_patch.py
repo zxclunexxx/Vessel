@@ -11,142 +11,175 @@ def replace_once(old, new, label):
         raise SystemExit(f'{label} anchor not found')
     text = text.replace(old, new, 1)
 
-# Voice rooms: disconnect only when pressing the button for the room we are actually in;
-# otherwise switch directly to the newly selected voice room.
+# Consistent user status labels in profile, friends and server roster.
 replace_once(
-"""async function toggleVoiceRoom(user){
-  if(voiceStream){await leaveVoiceRoom();return;}
-  if(!supabase||!user?.id||!activeChannelId||activeChannelKind!=='voice'){alert('Сначала открой голосовой канал.');return;}""",
-"""async function toggleVoiceRoom(user){
-  if(voiceStream && voiceChannelId===activeChannelId){await leaveVoiceRoom();return;}
-  if(!supabase||!user?.id||!activeChannelId||activeChannelKind!=='voice'){vesselNotice('Сначала открой голосовой канал.','error');return;}
-  if(voiceStream && voiceChannelId!==activeChannelId){await leaveVoiceRoom();}""",
-'voice room switching')
+"""function vesselDialog({title,message='',input=false,value='',placeholder='',choices=[]}) {""",
+"""function statusLabel(value='online') {
+  const key=String(value||'online').toLowerCase();
+  if(['dnd','не беспокоить'].includes(key))return 'Не беспокоить';
+  if(['away','idle','отошёл'].includes(key))return 'Отошёл';
+  return 'В сети';
+}
+function vesselDialog({title,message='',input=false,value='',placeholder='',choices=[]}) {""",
+'status helper')
+
+text = text.replace("member.role==='moderator'?'Модератор':escapeHtml(member.status)", "member.role==='moderator'?'Модератор':escapeHtml(statusLabel(member.status))")
+text = text.replace("<span>${friend.status||'в сети'}</span>", "<span>${escapeHtml(statusLabel(friend.status))}</span>")
+text = text.replace("<div><b>${user.name}</b><small>в сети</small></div>", "<div><b>${escapeHtml(user.name)}</b><small>${escapeHtml(statusLabel(user.status))}</small></div>")
+
+# Correct profile status values and preserve the selected state.
+replace_once(
+"""<label>Статус<select name=\"status\"><option>В сети</option><option>Не беспокоить</option><option>Отошёл</option></select></label>""",
+"""<label>Статус<select name=\"status\"><option value=\"online\" ${['online','В сети'].includes(user.status)?'selected':''}>В сети</option><option value=\"dnd\" ${['dnd','Не беспокоить'].includes(user.status)?'selected':''}>Не беспокоить</option><option value=\"away\" ${['away','Отошёл'].includes(user.status)?'selected':''}>Отошёл</option></select></label>""",
+'profile status select')
 
 replace_once(
-"""<button id=\"join-voice\" class=\"join-voice ${activeChannelKind==='voice'?'':'hidden'}\">${voiceStream?'Выйти':'Войти'}</button>""",
-"""<button id=\"join-voice\" class=\"join-voice ${activeChannelKind==='voice'?'':'hidden'}\">${voiceStream?(voiceChannelId===activeChannelId?'Выйти':'Переключиться'):'Войти'}</button>""",
-'voice header action')
+"""  document.querySelector('#settings-form').addEventListener('submit', async e => { e.preventDefault(); const data=new FormData(e.currentTarget); const name=data.get('name').trim(); const status=data.get('status'); if(supabase&&user.id){const {error}=await supabase.from('profiles').update({username:name,status}).eq('id',user.id);if(error){alert('Не удалось сохранить профиль.');return;}} localStorage.setItem('vesselUser', JSON.stringify({...user,name,status})); location.reload(); });""",
+"""  document.querySelector('#settings-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const data=new FormData(e.currentTarget);
+    const name=String(data.get('name')||'').trim();
+    const status=String(data.get('status')||'online');
+    if(!name)return;
+    if(!supabase||!user.id){vesselNotice('Сессия Vessel недоступна.','error');return;}
+    const {error}=await supabase.from('profiles').update({username:name,status}).eq('id',user.id);
+    if(error){vesselNotice('Не удалось сохранить профиль.','error');return;}
+    savedUser={...user,name,status};
+    localStorage.setItem('vesselUser',JSON.stringify(savedUser));
+    modal.classList.add('hidden');
+    vesselNotice('Профиль сохранён.','success');
+    render();
+  });""",
+'profile save flow')
+
+# Realtime: reload full channel messages so remote messages have real author data and attachments.
+replace_once(
+"""    supabase.channel(`vessel-channel-messages-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},payload=>{
+      if(payload.new.channel_id===activeChannelId && payload.new.author_id!==user.id){messages.push({name:'Участник',time:'только что',color:'#8b7cff',text:payload.new.body});render();}
+    }).subscribe(),""",
+"""    supabase.channel(`vessel-channel-messages-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},payload=>{
+      if(payload.new.channel_id===activeChannelId && payload.new.author_id!==user.id)loadChannelMessages(activeChannelId).catch(error=>console.warn('Message refresh failed',error));
+    }).subscribe(),""",
+'channel realtime refresh')
+
+# Realtime membership/channel/roster updates: users see kicks, joins and newly-created channels without reloads.
+replace_once(
+"""    supabase.channel(`vessel-friendships-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friendships',filter:`user_id=eq.${user.id}`},()=>{window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),
+    supabase.channel(`vessel-channel-messages-${user.id}`)""",
+"""    supabase.channel(`vessel-friendships-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friendships',filter:`user_id=eq.${user.id}`},()=>{window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),
+    supabase.channel(`vessel-memberships-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'server_members'},payload=>{
+      const row=payload.new?.server_id?payload.new:payload.old;
+      if(!row)return;
+      if(row.user_id===user.id){
+        window.__vesselServersLoaded=false;
+        syncSupabaseServers(user).then(()=>{
+          if(activeServerIndex>=Math.max(servers.length-1,1))activeServerIndex=0;
+          const active=servers[activeServerIndex];
+          serverMembers=[];window.__vesselMembersServerId=null;
+          if(active?.dbId){active.__channelsLoaded=false;syncSupabaseChannels(active);syncServerMembers(user,active);}else render();
+        });
+      }else{
+        const active=servers[activeServerIndex];
+        if(active?.dbId===row.server_id){window.__vesselMembersServerId=null;serverMembers=[];syncServerMembers(user,active);}
+      }
+    }).subscribe(),
+    supabase.channel(`vessel-channels-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'channels'},payload=>{
+      const row=payload.new?.server_id?payload.new:payload.old;
+      const active=servers[activeServerIndex];
+      if(row?.server_id&&active?.dbId===row.server_id){active.__channelsLoaded=false;syncSupabaseChannels(active);}
+    }).subscribe(),
+    supabase.channel(`vessel-channel-messages-${user.id}`)""",
+'realtime membership subscriptions')
+
+# Show the voice mute control only for the room the user is actually connected to.
+text = text.replace("class=\"join-voice ${voiceStream?'':'hidden'}\"", "class=\"join-voice ${voiceStream&&voiceChannelId===activeChannelId?'':'hidden'}\"")
+
+# Outgoing calls now time out instead of leaving a stuck ringing state forever.
+replace_once(
+"""let callCameraEnabled = true;""",
+"""let callCameraEnabled = true;
+let callInviteTimer = null;""",
+'call timeout state')
 
 replace_once(
-"voiceButton.classList.remove('hidden');voiceButton.textContent=voiceStream?'Выйти':'Подключиться';voiceButton.onclick=()=>toggleVoiceRoom(user);",
-"voiceButton.classList.remove('hidden');voiceButton.textContent=voiceStream?(voiceChannelId===activeChannelId?'Выйти':'Переключиться'):'Подключиться';voiceButton.onclick=()=>toggleVoiceRoom(user);",
-'voice channel action')
+"""    if (payload.type === 'accept') {
+      callAccepted = true;""",
+"""    if (payload.type === 'accept') {
+      if(callInviteTimer){clearTimeout(callInviteTimer);callInviteTimer=null;}
+      callAccepted = true;""",
+'call accept timeout cleanup')
 
 replace_once(
-"if(voiceStream){muteButton.classList.remove('hidden');muteButton.onclick=toggleVoiceMicrophone;}else muteButton.classList.add('hidden');",
-"if(voiceStream&&voiceChannelId===activeChannelId){muteButton.classList.remove('hidden');muteButton.onclick=toggleVoiceMicrophone;}else muteButton.classList.add('hidden');",
-'voice mute visibility')
+"""    await sendCallInvite(user,activeDmId,{type:'invite',name:user.name,video:callVideo,offer:callOffer});
+    render();""",
+"""    await sendCallInvite(user,activeDmId,{type:'invite',name:user.name,video:callVideo,offer:callOffer});
+    if(callInviteTimer)clearTimeout(callInviteTimer);
+    callInviteTimer=setTimeout(()=>{
+      if(callConnection&&!callAccepted){vesselNotice('Пользователь не ответил на звонок.');endCall(true);}
+    },30000);
+    render();""",
+'outgoing call timeout')
 
-# Calls should only be offered inside a real direct message. During a call the hangup controls stay visible.
 replace_once(
-"""  const callActions=callInProgress
-    ? `<button id=\"toggle-call-mic\" class=\"call-control\" title=\"${callMicEnabled?'Выключить микрофон':'Включить микрофон'}\">${callMicEnabled?'🎙':'🔇'}</button>${callVideo?`<button id=\"toggle-call-camera\" class=\"call-control\" title=\"${callCameraEnabled?'Выключить камеру':'Включить камеру'}\">${callCameraEnabled?'📷':'🚫'}</button>`:''}<button id=\"end-call\" class=\"hangup\" title=\"Завершить звонок\">☎</button>`
-    : `<button id=\"audio-call\" title=\"Аудиозвонок\">📞</button><button id=\"video-call\" title=\"Видеозвонок\">🎥</button>`;""",
-"""  const callActions=callInProgress
-    ? `<button id=\"toggle-call-mic\" class=\"call-control\" title=\"${callMicEnabled?'Выключить микрофон':'Включить микрофон'}\">${callMicEnabled?'🎙':'🔇'}</button>${callVideo?`<button id=\"toggle-call-camera\" class=\"call-control\" title=\"${callCameraEnabled?'Выключить камеру':'Включить камеру'}\">${callCameraEnabled?'📷':'🚫'}</button>`:''}<button id=\"end-call\" class=\"hangup\" title=\"Завершить звонок\">☎</button>`
-    : activeDmId ? `<button id=\"audio-call\" title=\"Аудиозвонок\">📞</button><button id=\"video-call\" title=\"Видеозвонок\">🎥</button>` : '';""",
-'call action visibility')
+"""  callAccepted=false;
+  callMicEnabled=true;""",
+"""  callAccepted=false;
+  if(callInviteTimer){clearTimeout(callInviteTimer);callInviteTimer=null;}
+  callMicEnabled=true;""",
+'end call timeout cleanup')
 
-# Add a reusable in-app list panel for message search and notifications.
+# Replace common call errors with non-blocking Vessel notifications.
+text = text.replace("alert('Открой личный чат с настоящим другом, чтобы начать звонок.');", "vesselNotice('Открой личный чат с настоящим другом, чтобы начать звонок.','error');")
+text = text.replace("alert('Не удалось получить доступ к микрофону или камере.');", "vesselNotice('Не удалось получить доступ к микрофону или камере.','error');")
+text = text.replace("alert(payload.type === 'busy' ? 'Пользователь уже разговаривает.' : 'Вызов отклонён.');", "vesselNotice(payload.type === 'busy' ? 'Пользователь уже разговаривает.' : 'Вызов отклонён.',payload.type==='busy'?'info':'error');")
+text = text.replace("alert('Разреши Vessel доступ к микрофону.');", "vesselNotice('Разреши Vessel доступ к микрофону.','error');")
+
+# Message composer errors and friend request actions should not use blocking browser alerts.
+text = text.replace("alert('Нужна активная сессия Vessel.');", "vesselNotice('Нужна активная сессия Vessel.','error');")
+text = text.replace("alert('Сначала выбери текстовый канал.');", "vesselNotice('Сначала выбери текстовый канал.','error');")
+text = text.replace("alert(`Не удалось отправить личное сообщение: ${error.message}`);", "vesselNotice(`Не удалось отправить личное сообщение: ${error.message}`,'error');")
+text = text.replace("alert(`Не удалось отправить сообщение: ${error.message}`);", "vesselNotice(`Не удалось отправить сообщение: ${error.message}`,'error');")
+text = text.replace("alert(`Не удалось удалить друга: ${error.message}`);", "vesselNotice(`Не удалось удалить друга: ${error.message}`,'error');")
+text = text.replace("if(error){alert('Не удалось принять заявку.');return;}", "if(error){vesselNotice('Не удалось принять заявку.','error');return;}else vesselNotice('Заявка принята.','success');")
+text = text.replace("if(error){alert('Не удалось отклонить заявку.');return;}", "if(error){vesselNotice('Не удалось отклонить заявку.','error');return;}else vesselNotice('Заявка отклонена.');")
+
+# Native invite-code dialog with one-click copy.
 replace_once(
 """function attachmentMarkup(attachments=[]) {""",
-"""function vesselListDialog(title,items=[],emptyText='Ничего нет') {
+"""function vesselCodeDialog(title,code) {
   const overlay=document.createElement('div');
   overlay.className='modal vessel-dialog';
-  const content=items.length?items.map(item=>`<div class=\"dialog-list-item\"><div><b>${escapeHtml(item.title||'')}</b>${item.meta?`<time>${escapeHtml(item.meta)}</time>`:''}</div><p>${escapeHtml(item.body||'')}</p></div>`).join(''):`<div class=\"dialog-empty\">${escapeHtml(emptyText)}</div>`;
-  overlay.innerHTML=`<div class=\"modal-card dialog-card dialog-list-card\"><button class=\"modal-close\" data-dialog-close>×</button><h2>${escapeHtml(title)}</h2><div class=\"dialog-list\">${content}</div></div>`;
+  overlay.innerHTML=`<div class=\"modal-card dialog-card\"><button class=\"modal-close\" data-code-close>×</button><h2>${escapeHtml(title)}</h2><p>Передай этот код человеку, которого хочешь пригласить.</p><div class=\"invite-code\">${escapeHtml(code)}</div><button class=\"primary\" type=\"button\" data-code-copy>Скопировать код</button></div>`;
   document.body.appendChild(overlay);
   const close=()=>overlay.remove();
-  overlay.querySelector('[data-dialog-close]').addEventListener('click',close);
+  overlay.querySelector('[data-code-close]').addEventListener('click',close);
   overlay.addEventListener('click',event=>{if(event.target===overlay)close();});
+  overlay.querySelector('[data-code-copy]').addEventListener('click',async()=>{
+    try{await navigator.clipboard.writeText(code);vesselNotice('Код приглашения скопирован.','success');}
+    catch{vesselNotice('Не удалось скопировать код. Выдели его вручную.','error');}
+  });
 }
 function attachmentMarkup(attachments=[]) {""",
-'list dialog helper')
-
-# Replace browser prompt/alert search with native Vessel UI and make it work for both channels and DMs.
-replace_once(
-"""  document.querySelector('#search-button').addEventListener('click', () => { const query=prompt('Поиск по сообщениям:'); if(query){ const found=messages.filter(m=>m.text.toLowerCase().includes(query.toLowerCase())); alert(found.length ? `Найдено сообщений: ${found.length}\\n\\n${found.map(m=>m.name+': '+m.text).join('\\n')}` : 'Ничего не найдено'); }});""",
-"""  document.querySelector('#search-button').addEventListener('click', async () => {
-    const query=await vesselPrompt('Поиск по сообщениям','','Что найти?');
-    if(!query?.trim())return;
-    const source=activeDmId?dmMessages:messages;
-    const needle=query.trim().toLowerCase();
-    const found=source.filter(message=>(message.text||'').toLowerCase().includes(needle)).slice(-50).reverse();
-    vesselListDialog(`Поиск: ${query.trim()}`,found.map(message=>({title:message.name,body:message.text,meta:message.time})), 'Совпадений не найдено');
-  });""",
-'message search UI')
+'invite code dialog helper')
 
 replace_once(
-"""  document.querySelector('#notifications').addEventListener('click', async () => { const unread=notifications.filter(n=>!n.read_at); if(!unread.length){alert('Новых уведомлений нет.');return;} alert(unread.map(n=>`${n.title}\\n${n.body}`).join('\\n\\n')); if(supabase&&user.id) await supabase.from('notifications').update({read_at:new Date().toISOString()}).eq('user_id',user.id).is('read_at',null); notifications=notifications.map(n=>({...n,read_at:n.read_at||new Date().toISOString()})); render(); });""",
-"""  document.querySelector('#notifications').addEventListener('click', async () => {
-    vesselListDialog('Уведомления',notifications.map(item=>({title:item.title||'Vessel',body:item.body||'',meta:item.created_at?new Date(item.created_at).toLocaleString('ru-RU'):''})), 'Уведомлений пока нет');
-    const unread=notifications.filter(item=>!item.read_at);
-    if(unread.length&&supabase&&user.id){
-      await supabase.from('notifications').update({read_at:new Date().toISOString()}).eq('user_id',user.id).is('read_at',null);
-      notifications=notifications.map(item=>({...item,read_at:item.read_at||new Date().toISOString()}));
-      render();
-    }
-  });""",
-'notifications UI')
+"""        alert(error?`Не удалось создать приглашение: ${error.message}`:`Код приглашения для сервера «${server.name}»:\\n\\n${code}\\n\\nПередай его другу.`);""",
+"""        if(error)vesselNotice(`Не удалось создать приглашение: ${error.message}`,'error');else vesselCodeDialog(`Приглашение в ${server.name}`,code);""",
+'invite code UI')
 
-# Turn the previously dead smile button into a small native emoji picker.
-replace_once(
-"""<button type=\"button\">☺</button><button type=\"submit\" class=\"send\">➤</button>""",
-"""<button type=\"button\" id=\"emoji-button\" title=\"Эмодзи\">☺</button><button type=\"submit\" class=\"send\">➤</button>""",
-'emoji button id')
+# A few remaining frequent server/channel errors become Vessel toasts.
+for old,new in [
+    ("alert('Сначала выбери сервер.');","vesselNotice('Сначала выбери сервер.','error');"),
+    ("alert('Сначала выбери настоящий сервер.');","vesselNotice('Сначала выбери настоящий сервер.','error');"),
+    ("alert('Создавать каналы может только владелец сервера.');","vesselNotice('Создавать каналы может только владелец сервера.','error');"),
+    ("alert('Нужна активная сессия Vessel.');","vesselNotice('Нужна активная сессия Vessel.','error');"),
+]:
+    text=text.replace(old,new)
 
-replace_once(
-"""  document.querySelector('.attach').addEventListener('click', () => {""",
-"""  document.querySelector('#emoji-button')?.addEventListener('click',async()=>{
-    const emoji=await vesselChoice('Эмодзи',[{label:'😀',value:'😀'},{label:'😂',value:'😂'},{label:'❤️',value:'❤️'},{label:'👍',value:'👍'},{label:'🔥',value:'🔥'},{label:'🎉',value:'🎉'},{label:'😎',value:'😎'},{label:'🤝',value:'🤝'}]);
-    if(!emoji)return;
-    const input=document.querySelector('.composer input');
-    if(!input)return;
-    const start=input.selectionStart??input.value.length;
-    const end=input.selectionEnd??start;
-    input.value=input.value.slice(0,start)+emoji+input.value.slice(end);
-    input.focus();
-    input.setSelectionRange(start+emoji.length,start+emoji.length);
-  });
-  document.querySelector('.attach').addEventListener('click', () => {""",
-'emoji handler')
-
-# Improve common file/attachment errors without browser alerts.
-text = text.replace("if(error||!data?.signedUrl){alert('Не удалось открыть файл.');return;}", "if(error||!data?.signedUrl){vesselNotice('Не удалось открыть файл.','error');return;}")
-text = text.replace("if (!supabase || !user?.id) { alert('Для загрузки файлов нужен настоящий аккаунт.'); return null; }", "if (!supabase || !user?.id) { vesselNotice('Для загрузки файлов нужен настоящий аккаунт.','error'); return null; }")
-text = text.replace("if(error){alert(`Файл не загрузился: ${error.message}`);return null;}", "if(error){vesselNotice(`Файл не загрузился: ${error.message}`,'error');return null;}")
-
-# Do not show an endless loading state when there is no selected server or the roster loaded empty.
-replace_once(
-"""    : `<div class=\"members-title\">УЧАСТНИКИ</div><div class=\"dm-empty\">Список загружается…</div>`;""",
-"""    : `<div class=\"members-title\">УЧАСТНИКИ</div><div class=\"dm-empty\">${!activeServer?.dbId?'Выбери или создай сервер.':window.__vesselMembersServerId===activeServer.dbId?'На сервере пока нет участников.':'Список загружается…'}</div>`;""",
-'member empty state')
-
-# Mobile navigation: channels become a slide-out drawer instead of disappearing completely.
-replace_once(
-"""<div class=\"head-actions\">${canManageChannel?""",
-"""<div class=\"head-actions\"><button id=\"mobile-nav\" title=\"Каналы\">☰</button>${canManageChannel?""",
-'mobile nav button')
-
-replace_once(
-"""  document.querySelector('#profile-settings').addEventListener('click', () => modal.classList.remove('hidden'));""",
-"""  document.querySelector('#profile-settings').addEventListener('click', () => modal.classList.remove('hidden'));
-  document.querySelector('#mobile-nav')?.addEventListener('click',()=>document.querySelector('.channels')?.classList.toggle('mobile-open'));""",
-'mobile nav handler')
-
-replace_once(
-"""    if (!isDm && channel.dataset.channelId) loadChannelMessages(channel.dataset.channelId);""",
-"""    document.querySelector('.channels')?.classList.remove('mobile-open');
-    if (!isDm && channel.dataset.channelId) loadChannelMessages(channel.dataset.channelId);""",
-'close mobile drawer after channel select')
-
-# A little polish for the new native panels and the mobile channel drawer.
 css += r'''
-.dialog-list-card{width:min(560px,100%);max-height:min(76vh,680px);display:flex;flex-direction:column}.dialog-list{overflow:auto;margin-top:14px;display:grid;gap:8px}.dialog-list-item{background:#232837;border:1px solid #353c50;border-radius:11px;padding:11px 12px}.dialog-list-item>div{display:flex;align-items:baseline;justify-content:space-between;gap:12px}.dialog-list-item b{color:#eef0f7}.dialog-list-item time{color:#747c91;font-size:10px;white-space:nowrap}.dialog-list-item p{margin:6px 0 0;color:#b8bed0;white-space:pre-wrap;overflow-wrap:anywhere}.dialog-empty{padding:24px 10px;text-align:center;color:#777f93}#mobile-nav{display:none!important}
-@media(max-width:600px){.channels{display:block!important;position:fixed;left:56px;top:0;bottom:0;width:min(290px,calc(100vw - 56px));z-index:30;transform:translateX(-110%);transition:transform .2s ease;box-shadow:18px 0 55px #0009}.channels.mobile-open{transform:translateX(0)}#mobile-nav{display:inline-grid!important;place-items:center}.dialog-list-item>div{align-items:flex-start;flex-direction:column;gap:3px}.dialog-list-item time{white-space:normal}}
+.invite-code{margin:14px 0;background:#10131b;border:1px solid #414960;border-radius:11px;padding:15px;text-align:center;font:800 18px ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.08em;color:#b8b1ff;user-select:all}.settings-saving{opacity:.7;pointer-events:none}
 '''
 
 main_path.write_text(text, encoding='utf-8')
 css_path.write_text(css, encoding='utf-8')
-print('Applied Vessel voice, search, notifications, emoji and mobile UX patch')
+print('Applied Vessel realtime, profile, invite and call-state patch')
