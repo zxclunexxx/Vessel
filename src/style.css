@@ -14,3 +14,5 @@
 @media(max-width:600px){.channels{display:block!important;position:fixed;left:56px;top:0;bottom:0;width:min(290px,calc(100vw - 56px));z-index:30;transform:translateX(-110%);transition:transform .2s ease;box-shadow:18px 0 55px #0009}.channels.mobile-open{transform:translateX(0)}#mobile-nav{display:inline-grid!important;place-items:center}.dialog-list-item>div{align-items:flex-start;flex-direction:column;gap:3px}.dialog-list-item time{white-space:normal}}
 
 .invite-code{margin:14px 0;background:#10131b;border:1px solid #414960;border-radius:11px;padding:15px;text-align:center;font:800 18px ui-monospace,SFMono-Regular,Consolas,monospace;letter-spacing:.08em;color:#b8b1ff;user-select:all}.settings-saving{opacity:.7;pointer-events:none}
+
+.empty-state{color:#7f879b;line-height:1.6}.channel-section:has(.dm-empty){min-height:54px}
