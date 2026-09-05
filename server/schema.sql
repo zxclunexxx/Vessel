@@ -226,3 +226,43 @@ with check (bucket_id = 'vessel-files' and owner_id = (select auth.uid())::text)
 drop policy if exists "users delete vessel files" on storage.objects;
 create policy "users delete vessel files" on storage.objects for delete to authenticated
 using (bucket_id = 'vessel-files' and owner_id = (select auth.uid())::text);
+
+-- User notifications.
+create table if not exists public.notifications (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  type text not null check (type in ('friend_request','friend_accepted','direct_message','server_invite','system')),
+  title text not null,
+  body text not null,
+  data jsonb not null default '{}'::jsonb,
+  read_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists notifications_user_created_idx on public.notifications(user_id,created_at desc);
+alter table public.notifications enable row level security;
+drop policy if exists "users can read own notifications" on public.notifications;
+create policy "users can read own notifications" on public.notifications for select to authenticated using (user_id=(select auth.uid()));
+drop policy if exists "users can update own notifications" on public.notifications;
+create policy "users can update own notifications" on public.notifications for update to authenticated using (user_id=(select auth.uid())) with check (user_id=(select auth.uid()));
+
+create or replace function public.vessel_notify_friend_request()
+returns trigger language plpgsql security definer set search_path=public as $$
+begin
+  insert into public.notifications(user_id,type,title,body,data)
+  values (new.receiver_id,'friend_request','Новая заявка в друзья','Кто-то хочет добавить тебя в друзья',jsonb_build_object('request_id',new.id,'sender_id',new.sender_id));
+  return new;
+end;
+$$;
+drop trigger if exists vessel_friend_request_notification on public.friend_requests;
+create trigger vessel_friend_request_notification after insert on public.friend_requests for each row execute function public.vessel_notify_friend_request();
+
+create or replace function public.vessel_notify_direct_message()
+returns trigger language plpgsql security definer set search_path=public as $$
+begin
+  insert into public.notifications(user_id,type,title,body,data)
+  values (new.receiver_id,'direct_message','Новое личное сообщение',left(new.body,140),jsonb_build_object('message_id',new.id,'sender_id',new.sender_id));
+  return new;
+end;
+$$;
+drop trigger if exists vessel_direct_message_notification on public.direct_messages;
+create trigger vessel_direct_message_notification after insert on public.direct_messages for each row execute function public.vessel_notify_direct_message();
