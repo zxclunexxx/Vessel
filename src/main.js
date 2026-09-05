@@ -143,20 +143,23 @@ async function syncServerMembers(user, server) {
 async function findAndRequestFriend(user) {
   const query=await vesselPrompt('Добавить друга','','Точное имя пользователя');
   if(!query?.trim()) return;
-  if(!supabase||!user?.id){alert('Войди через настоящий аккаунт, чтобы добавлять друзей.');return;}
-  const {data:found,error}=await supabase.from('profiles').select('id,username,avatar_color,status').ilike('username',query.trim()).limit(1);
-  if(error||!found?.[0]){alert('Пользователь не найден.');return;}
-  const target=found[0];
-  if(target.id===user.id){alert('Нельзя добавить самого себя.');return;}
-  if(friends.some(friend=>friend.id===target.id)){alert(`${target.username} уже у тебя в друзьях.`);return;}
-  const {data:existing}=await supabase.from('friend_requests').select('id,status,sender_id,receiver_id').or(`and(sender_id.eq.${user.id},receiver_id.eq.${target.id}),and(sender_id.eq.${target.id},receiver_id.eq.${user.id})`).limit(1);
+  if(!supabase||!user?.id){vesselNotice('Войди через настоящий аккаунт, чтобы добавлять друзей.','error');return;}
+  const {data:searchResult,error:searchError}=await supabase.functions.invoke('search-user',{body:{username:query.trim()}});
+  if(searchError){vesselNotice('Не удалось выполнить поиск пользователя.','error');return;}
+  const target=searchResult?.user;
+  if(!target){vesselNotice('Пользователь не найден.','error');return;}
+  if(target.self||target.id===user.id){vesselNotice('Нельзя добавить самого себя.','error');return;}
+  if(friends.some(friend=>friend.id===target.id)){vesselNotice(`${target.username} уже у тебя в друзьях.`);return;}
+  const {data:existing,error:existingError}=await supabase.from('friend_requests').select('id,status,sender_id,receiver_id').or(`and(sender_id.eq.${user.id},receiver_id.eq.${target.id}),and(sender_id.eq.${target.id},receiver_id.eq.${user.id})`).limit(1);
+  if(existingError){vesselNotice('Не удалось проверить заявки в друзья.','error');return;}
   const request=existing?.[0];
   if(request?.status==='pending'){
-    alert(request.receiver_id===user.id ? `${target.username} уже отправил тебе заявку. Открой раздел «Друзья».` : 'Заявка уже отправлена.');
+    vesselNotice(request.receiver_id===user.id ? `${target.username} уже отправил тебе заявку. Открой раздел «Друзья».` : 'Заявка уже отправлена.');
     return;
   }
   const {error:sendError}=await supabase.from('friend_requests').upsert({sender_id:user.id,receiver_id:target.id,status:'pending',updated_at:new Date().toISOString()},{onConflict:'sender_id,receiver_id'});
-  sendError?alert('Не удалось отправить заявку.'):vesselNotice(`Заявка пользователю ${target.username} отправлена.`,'success');
+  if(sendError){vesselNotice('Не удалось отправить заявку.','error');return;}
+  vesselNotice(`Заявка пользователю ${target.username} отправлена.`,'success');
 }
 
 async function syncSocial(user) {
