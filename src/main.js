@@ -223,11 +223,20 @@ async function loadDirectMessages(user, friendId) {
 }
 async function uploadVesselFile(file, user) {
   if (!supabase || !user?.id) { vesselNotice('Для загрузки файлов нужен настоящий аккаунт.','error'); return null; }
-  const safeName=file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
-  const path=`${user.id}/${crypto.randomUUID()}-${safeName}`;
-  const {error}=await supabase.storage.from('vessel-files').upload(path,file,{contentType:file.type||'application/octet-stream',upsert:false});
+  if(file.size>25*1024*1024){vesselNotice('Максимальный размер файла — 25 МБ.','error');return null;}
+  let context=null;
+  if(activeDmId)context=`dm/${activeDmId}`;
+  else if(activeChannelId&&activeChannelKind==='text')context=`channel/${activeChannelId}`;
+  if(!context){vesselNotice('Открой личный чат или текстовый канал перед загрузкой файла.','error');return null;}
+  const safeName=file.name.replace(/[^a-zA-Z0-9._-]/g,'_')||'file';
+  const objectPath=`${user.id}/${context}/${crypto.randomUUID()}-${safeName}`;
+  const {error}=await supabase.storage.from('vessel-files').upload(objectPath,file,{contentType:file.type||'application/octet-stream',upsert:false});
   if(error){vesselNotice(`Файл не загрузился: ${error.message}`,'error');return null;}
-  return {name:file.name,path,type:file.type||'application/octet-stream',size:file.size};
+  return {name:file.name,path:objectPath,type:file.type||'application/octet-stream',size:file.size};
+}
+async function cleanupFailedAttachment(attachment){
+  if(!supabase||!attachment?.path)return;
+  try{await supabase.storage.from('vessel-files').remove([attachment.path]);}catch(error){console.warn('Attachment cleanup failed',error);}
 }
 
 function removeVoicePeer(peerId) {
@@ -801,12 +810,12 @@ function render() {
       if(activeDmId){
         const peerId=activeDmId;
         const {error}=await supabase.from('direct_messages').insert({sender_id:user.id,receiver_id:peerId,body,attachments:[attachment]});
-        if(error){vesselNotice(`Не удалось отправить файл: ${error.message}`,'error');return;}
+        if(error){await cleanupFailedAttachment(attachment);vesselNotice(`Не удалось отправить файл: ${error.message}`,'error');return;}
         await loadDirectMessages(user,peerId);
       } else {
         if(!activeChannelId||activeChannelKind!=='text'){vesselNotice('Открой текстовый канал или личный чат.','error');return;}
         const {error}=await supabase.from('messages').insert({channel_id:activeChannelId,author_id:user.id,body,attachments:[attachment]});
-        if(error){vesselNotice(`Не удалось отправить файл: ${error.message}`,'error');return;}
+        if(error){await cleanupFailedAttachment(attachment);vesselNotice(`Не удалось отправить файл: ${error.message}`,'error');return;}
         messages.push({name:user.name,time:'только что',color:user.avatarColor||'#39d9a6',text:body,attachments:[attachment]});
       }
       render();
