@@ -35,13 +35,7 @@ let notifications = [];
 let serverMembers = [];
 const savedChannelMap = JSON.parse(localStorage.getItem('vesselChannelMap') || '{}');
 async function syncSupabaseMessages() {
-  if (!supabase || window.__vesselDbLoaded) return;
-  const {data: channels} = await supabase.from('channels').select('id').limit(1);
-  if (!channels?.[0]) return;
-  activeChannelId = channels[0].id;
-  const {data} = await supabase.from('messages').select('body,created_at,profiles(username,avatar_color)').eq('channel_id',activeChannelId).order('created_at',{ascending:true}).limit(100);
-  if (data?.length) { messages=data.map(m=>({name:m.profiles?.username||'Участник',time:new Date(m.created_at).toLocaleString('ru-RU'),color:m.profiles?.avatar_color||'#8b7cff',text:m.body})); render(); }
-  window.__vesselDbLoaded=true;
+  window.__vesselDbLoaded = true;
 }
 async function loadChannelMessages(channelId) {
   if (!supabase || !channelId) return;
@@ -59,13 +53,27 @@ async function syncSupabaseServers(user) {
   ]);
   const all=[...(ownedResult.data||[]),...(memberResult.data||[]).filter(s=>!(ownedResult.data||[]).some(o=>o.id===s.id))];
   window.__vesselServersLoaded=true;
-  if (all.length) { servers=[...all.map(s=>({id:s.id,dbId:s.id,icon:s.icon,name:s.name,role:s.owner_id===user.id?'owner':(memberships||[]).find(m=>m.server_id===s.id)?.role||'member'})),{icon:'+',name:'Добавить сервер',add:true}]; if(activeServerIndex>=servers.length-1) activeServerIndex=0; render(); }
+  servers=[...all.map(s=>({id:s.id,dbId:s.id,icon:s.icon,name:s.name,role:s.owner_id===user.id?'owner':(memberships||[]).find(m=>m.server_id===s.id)?.role||'member'})),{id:'add-server',icon:'+',name:'Добавить сервер',add:true}];
+  if(activeServerIndex>=Math.max(servers.length-1,1)) activeServerIndex=0;
+  render();
 }
 async function syncSupabaseChannels(server) {
   if (!supabase || !server?.dbId || server.__channelsLoaded) return;
-  const {data} = await supabase.from('channels').select('id,name,kind,position').eq('server_id',server.dbId).order('position');
-  if (data?.length) { dbChannels=data; savedChannelMap[server.id]=data; saveChannelMap(); if (server.id===servers[activeServerIndex]?.id) { activeChannelId=data[0].id; activeChannelName=data[0].name; activeChannelKind=data[0].kind; } render(); if(server.id===servers[activeServerIndex]?.id) loadChannelMessages(activeChannelId); }
+  const {data,error} = await supabase.from('channels').select('id,name,kind,position').eq('server_id',server.dbId).order('position');
+  if(error){console.warn('Channel sync failed',error);return;}
+  const rows=data||[];
+  dbChannels=rows;
+  savedChannelMap[server.id]=rows;
   server.__channelsLoaded=true;
+  if(server.id===servers[activeServerIndex]?.id){
+    const firstText=rows.find(channel=>channel.kind==='text')||rows[0]||null;
+    activeChannelId=firstText?.id||null;
+    activeChannelName=firstText?.name||'нет каналов';
+    activeChannelKind=firstText?.kind||'text';
+    messages=[];
+    if(activeChannelId && activeChannelKind==='text') await loadChannelMessages(activeChannelId);
+    else render();
+  }
 }
 async function syncServerMembers(user, server) {
   if (!supabase || !user?.id || !server?.dbId) { serverMembers=[]; return; }
@@ -127,7 +135,7 @@ async function syncNotifications(user) {
 }
 async function loadDirectMessages(user, friendId) {
   if (!supabase || !user?.id || !friendId) return;
-  const {data} = await supabase.from('direct_messages').select('id,sender_id,receiver_id,body,created_at,profiles!direct_messages_sender_id_fkey(username,avatar_color)').or(`and(sender_id.eq.${user.id},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${user.id})`).order('created_at',{ascending:true});
+  const {data} = await supabase.from('direct_messages').select('id,sender_id,receiver_id,body,attachments,created_at,profiles!direct_messages_sender_id_fkey(username,avatar_color)').or(`and(sender_id.eq.${user.id},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${user.id})`).order('created_at',{ascending:true});
   dmMessages = (data || []).map(row => ({name:row.profiles?.username || 'Пользователь',time:new Date(row.created_at).toLocaleString('ru-RU'),color:row.profiles?.avatar_color || '#8b7cff',text:row.body}));
   render();
 }
@@ -515,15 +523,30 @@ function render() {
       </aside>
       <section class="chat">
         <header class="chat-head"><div><h1><span>${currentDm?'@':activeChannelKind==='voice'?'⌁':'#'}</span> ${currentDm || activeChannelName}</h1><p>${currentDm?'Личная переписка':activeChannelKind==='voice'?'Голосовая комната':servers[activeServerIndex]?.name || 'Vessel'}</p></div><div class="head-actions">${callActions}<button id="join-voice" class="join-voice ${activeChannelKind==='voice'?'':'hidden'}">${voiceStream?'Выйти':'Войти'}</button><button id="mute-voice" class="join-voice ${voiceStream?'':'hidden'}">🎙</button><button id="camera-voice" class="join-voice ${voiceStream?'':'hidden'}">📷</button><button id="search-button">⌕</button><button id="friends-button" title="Друзья">♧</button><button id="notifications" title="Уведомления">🔔${notifications.filter(n=>!n.read_at).length?` <sup>${notifications.filter(n=>!n.read_at).length}</sup>`:''}</button><button id="head-settings">⚙</button></div></header>
-        <video id="remote-video" class="remote-video ${remoteCallStream?'':'hidden'}" autoplay playsinline></video><video id="local-video" class="local-video ${voiceStream||callStream?'':'hidden'}" autoplay muted playsinline></video><div class="messages">${friendsOpen?`<div class="friends-view"><div class="friends-hero"><h2>Друзья</h2><button id="add-friend" class="primary">Найти пользователя</button></div>${friendRequests.map(request=>`<div class="friend-row request-row"><div class="avatar" style="background:#ffb45e">${(request.profiles?.username||'?')[0].toUpperCase()}</div><b>${request.profiles?.username||'Пользователь'}</b><span>Заявка</span><button data-accept-request="${request.id}" data-sender="${request.sender_id}">Принять</button></div>`).join('')}${friends.length ? friends.map(friend=>`<div class="friend-row"><div class="avatar" style="background:${friend.avatar_color||'#8b7cff'}">${friend.username[0].toUpperCase()}</div><b>${friend.username}</b><span>${friend.status||'в сети'}</span><button data-dm-id="${friend.id}" data-dm="${friend.username}">💬</button><button data-call-id="${friend.id}" data-call="${friend.username}">📞</button></div>`).join('') : `<p class="empty-state">Пока нет добавленных друзей. Нажми «Найти пользователя».</p>`}</div>`:`<div class="welcome"><div class="welcome-icon">${currentDm?'@':activeChannelKind==='voice'?'⌁':'#'}</div><h2>${currentDm?`Переписка с ${currentDm}`:`Добро пожаловать в ${activeChannelKind==='voice'?'':'#'}${activeChannelName}!`}</h2><p>${activeChannelKind==='voice'?'Подключись к комнате, чтобы общаться голосом.':'Здесь начинается ваше общение.'}</p></div>${(activeDmId?dmMessages:messages).map(m => `<article class="message"><div class="avatar" style="background:${m.color}">${m.name[0]}</div><div><div class="message-meta"><b>${m.name}</b><time>${m.time}</time></div><p>${m.text}</p></div></article>`).join('')}`}</div>
-        <form class="composer ${friendsOpen?'hidden':''}"><button type="button" class="attach">＋</button><input placeholder="${currentDm?`Написать пользователю ${currentDm}`:`Написать в #${activeChannelName}`}" /><button type="button">☺</button><button type="submit" class="send">➤</button></form>
+        <video id="remote-video" class="remote-video ${remoteCallStream?'':'hidden'}" autoplay playsinline></video><video id="local-video" class="local-video ${voiceStream||callStream?'':'hidden'}" autoplay muted playsinline></video><div class="messages">${friendsOpen?`<div class="friends-view"><div class="friends-hero"><h2>Друзья</h2><button id="add-friend" class="primary">Найти пользователя</button></div>${friendRequests.map(request=>`<div class="friend-row request-row"><div class="avatar" style="background:#ffb45e">${(request.profiles?.username||'?')[0].toUpperCase()}</div><b>${request.profiles?.username||'Пользователь'}</b><span>Заявка</span><button data-accept-request="${request.id}" data-sender="${request.sender_id}">Принять</button><button class="danger compact" data-decline-request="${request.id}">Отклонить</button></div>`).join('')}${friends.length ? friends.map(friend=>`<div class="friend-row"><div class="avatar" style="background:${friend.avatar_color||'#8b7cff'}">${friend.username[0].toUpperCase()}</div><b>${friend.username}</b><span>${friend.status||'в сети'}</span><button data-dm-id="${friend.id}" data-dm="${friend.username}">💬</button><button data-call-id="${friend.id}" data-call="${friend.username}">📞</button></div>`).join('') : `<p class="empty-state">Пока нет добавленных друзей. Нажми «Найти пользователя».</p>`}</div>`:`<div class="welcome"><div class="welcome-icon">${currentDm?'@':activeChannelKind==='voice'?'⌁':'#'}</div><h2>${currentDm?`Переписка с ${currentDm}`:`Добро пожаловать в ${activeChannelKind==='voice'?'':'#'}${activeChannelName}!`}</h2><p>${activeChannelKind==='voice'?'Подключись к комнате, чтобы общаться голосом.':'Здесь начинается ваше общение.'}</p></div>${(activeDmId?dmMessages:messages).map(m => `<article class="message"><div class="avatar" style="background:${m.color}">${m.name[0]}</div><div><div class="message-meta"><b>${m.name}</b><time>${m.time}</time></div><p>${m.text}</p></div></article>`).join('')}`}</div>
+        <form class="composer ${friendsOpen||(!currentDm&&activeChannelKind==='voice')?'hidden':''}"><button type="button" class="attach">＋</button><input placeholder="${currentDm?`Написать пользователю ${currentDm}`:`Написать в #${activeChannelName}`}" /><button type="button">☺</button><button type="submit" class="send">➤</button></form>
       </section>
       <aside class="members">${voiceStream?'<div class="voice-status">🎙 Ты в голосовой комнате</div>':''}${membersList}</aside>
     </main><div class="modal hidden" id="settings-modal"><div class="modal-card"><button class="modal-close" id="close-settings">×</button><h2>Настройки профиля</h2><p>Измени данные, которые видят другие участники Vessel.</p><form id="settings-form"><label>Имя пользователя<input name="name" value="${user.name}" required minlength="2" /></label><label>Статус<select name="status"><option>В сети</option><option>Не беспокоить</option><option>Отошёл</option></select></label><button class="primary" type="submit">Сохранить изменения</button></form><button class="danger" id="logout" type="button">Выйти из аккаунта</button></div></div>${incomingCall?`<div class="modal call-modal" id="incoming-call-modal"><div class="modal-card"><div class="call-avatar">${incomingCall.name[0]?.toUpperCase()||'?'}</div><h2>${incomingCall.video?'Видеозвонок':'Аудиозвонок'}</h2><p>${incomingCall.name} звонит тебе в Vessel.</p><div class="call-actions"><button class="danger" id="reject-call" type="button">Отклонить</button><button class="primary" id="accept-call" type="button">Принять</button></div></div></div>`:''}`;
   document.querySelector('.composer').addEventListener('submit', async e => { e.preventDefault(); const input=e.currentTarget.querySelector('input'); const text=input.value.trim(); if(!text)return; if(!supabase||!user.id){alert('Нужна активная сессия Vessel.');return;} if(activeDmId){ const {error}=await supabase.from('direct_messages').insert({sender_id:user.id,receiver_id:activeDmId,body:text}); if(error){alert(`Не удалось отправить личное сообщение: ${error.message}`);return;} dmMessages.push({name:user.name,time:'только что',color:user.avatarColor||'#39d9a6',text}); } else { if(!activeChannelId){alert('Сначала выбери текстовый канал.');return;} const {error}=await supabase.from('messages').insert({channel_id:activeChannelId,author_id:user.id,body:text}); if(error){alert(`Не удалось отправить сообщение: ${error.message}`);return;} messages.push({name:user.name,time:'только что',color:user.avatarColor||'#39d9a6',text}); } input.value=''; render(); const list=document.querySelector('.messages'); if(list)list.scrollTop=list.scrollHeight; });
   document.querySelector('.attach').addEventListener('click', () => {
-    const picker = document.createElement('input'); picker.type = 'file'; picker.accept = 'image/*,.pdf,.doc,.docx,.zip';
-    picker.onchange = async () => { const file = picker.files[0]; if (!file) return; const attachment=await uploadVesselFile(file,user); if(!attachment)return; const body=`📎 ${file.name}`; if(activeChannelId&&user.id){const {error}=await supabase.from('messages').insert({channel_id:activeChannelId,author_id:user.id,body,attachments:[attachment]});if(error){alert('Файл загрузился, но сообщение не отправилось.');return;}} messages.push({name:user.name,time:'только что',color:'#39d9a6',text:body}); localStorage.setItem('vesselMessages', JSON.stringify(messages)); render(); };
+    const picker=document.createElement('input'); picker.type='file'; picker.accept='image/*,.pdf,.doc,.docx,.zip';
+    picker.onchange=async()=>{
+      const file=picker.files[0]; if(!file)return;
+      const attachment=await uploadVesselFile(file,user); if(!attachment)return;
+      const body=`📎 ${file.name}`;
+      if(activeDmId){
+        const {error}=await supabase.from('direct_messages').insert({sender_id:user.id,receiver_id:activeDmId,body,attachments:[attachment]});
+        if(error){alert(`Не удалось отправить файл: ${error.message}`);return;}
+        dmMessages.push({name:user.name,time:'только что',color:user.avatarColor||'#39d9a6',text:body});
+      } else {
+        if(!activeChannelId||activeChannelKind!=='text'){alert('Открой текстовый канал или личный чат.');return;}
+        const {error}=await supabase.from('messages').insert({channel_id:activeChannelId,author_id:user.id,body,attachments:[attachment]});
+        if(error){alert(`Не удалось отправить файл: ${error.message}`);return;}
+        messages.push({name:user.name,time:'только что',color:user.avatarColor||'#39d9a6',text:body});
+      }
+      render();
+    };
     picker.click();
   });
   document.querySelector('#search-button').addEventListener('click', () => { const query=prompt('Поиск по сообщениям:'); if(query){ const found=messages.filter(m=>m.text.toLowerCase().includes(query.toLowerCase())); alert(found.length ? `Найдено сообщений: ${found.length}\n\n${found.map(m=>m.name+': '+m.text).join('\n')}` : 'Ничего не найдено'); }});
@@ -531,7 +554,20 @@ function render() {
   const modal = document.querySelector('#settings-modal');
   document.querySelector('#profile-settings').addEventListener('click', () => modal.classList.remove('hidden'));
   document.querySelector('.more').addEventListener('click', async () => { const server=servers[activeServerIndex]; if(!server?.dbId||server.role!=='owner'){alert(`Твоя роль: ${server?.role||'участник'}. Создавать приглашения может только владелец.`);return;} const code=`VSL-${crypto.randomUUID().slice(0,8).toUpperCase()}`; const {error}=await supabase.from('server_invites').insert({server_id:server.dbId,created_by:user.id,code}); alert(error?'Не удалось создать приглашение.':`Код приглашения для сервера «${server.name}»:\n\n${code}\n\nПередай его другу.`); });
-  const addChannel = async kind => { const name=prompt(kind==='voice'?'Название голосовой комнаты:':'Название нового канала:'); if(!name?.trim()) return; const server=servers[activeServerIndex]; const channels=serverChannels(); const created={name:name.trim(),kind}; if(supabase&&user.id&&server.dbId){ const {data,error}=await supabase.from('channels').insert({server_id:server.dbId,name:created.name,kind,position:channels.length}).select('id,name,kind,position').single(); if(error){alert('Не удалось создать канал. Проверь права доступа.');return;} created.id=data.id; activeChannelId=data.id; } savedChannelMap[server.id]=[...channels,created]; saveChannelMap(); activeChannelName=created.name; activeChannelKind=kind; currentDm=null; render(); };
+  const addChannel = async kind => {
+    const name=prompt(kind==='voice'?'Название голосовой комнаты:':'Название нового канала:');
+    if(!name?.trim())return;
+    const server=servers[activeServerIndex];
+    if(!supabase||!user.id||!server?.dbId){alert('Сначала выбери настоящий сервер.');return;}
+    if(server.role!=='owner'){alert('Создавать каналы может только владелец сервера.');return;}
+    const position=serverChannels().length;
+    const {data,error}=await supabase.from('channels').insert({server_id:server.dbId,name:name.trim(),kind,position}).select('id,name,kind,position').single();
+    if(error){alert(`Не удалось создать канал: ${error.message}`);return;}
+    server.__channelsLoaded=false;
+    await syncSupabaseChannels(server);
+    activeChannelId=data.id; activeChannelName=data.name; activeChannelKind=data.kind; currentDm=null; activeDmId=null;
+    if(kind==='text') await loadChannelMessages(data.id); else render();
+  };
   document.querySelector('#channel-add').addEventListener('click', () => addChannel('text'));
   document.querySelector('#voice-add').addEventListener('click', () => addChannel('voice'));
   document.querySelector('#dm-add').addEventListener('click', () => findAndRequestFriend(user));
@@ -557,6 +593,7 @@ function render() {
   document.querySelector('#head-settings').addEventListener('click',()=>modal.classList.remove('hidden'));
   document.querySelectorAll('[data-dm]').forEach(button=>button.addEventListener('click',()=>{currentDm=button.dataset.dm;activeDmId=button.dataset.dmId||null;friendsOpen=false;window.__vesselDmLoaded=false;render();}));
   document.querySelectorAll('[data-accept-request]').forEach(button=>button.addEventListener('click',async()=>{if(!supabase||!user.id)return;const {error}=await supabase.from('friend_requests').update({status:'accepted',updated_at:new Date().toISOString()}).eq('id',button.dataset.acceptRequest).eq('receiver_id',user.id);if(error){alert('Не удалось принять заявку.');return;}window.__vesselSocialLoaded=false;await syncSocial(user);render();}));
+  document.querySelectorAll('[data-decline-request]').forEach(button=>button.addEventListener('click',async()=>{if(!supabase||!user.id)return;const {error}=await supabase.from('friend_requests').update({status:'declined',updated_at:new Date().toISOString()}).eq('id',button.dataset.declineRequest).eq('receiver_id',user.id);if(error){alert('Не удалось отклонить заявку.');return;}window.__vesselSocialLoaded=false;await syncSocial(user);render();}));
   document.querySelector('#add-friend')?.addEventListener('click',()=>findAndRequestFriend(user));
   document.querySelector('#audio-call')?.addEventListener('click',()=>startCall(false,user));
   document.querySelector('#video-call')?.addEventListener('click',()=>startCall(true,user));
@@ -567,8 +604,22 @@ function render() {
   document.querySelectorAll('.server[data-server-index]').forEach(server => server.addEventListener('click', async () => {
     if (server.classList.contains('add')) {
       if(supabase&&user.id&&confirm('У тебя есть код приглашения? Нажми «ОК», чтобы вступить в сервер.')){const code=prompt('Введи код приглашения:');if(code?.trim()){await joinByInvite(code,user);return;}}
-      const name = prompt('Название нового сервера:');
-      if (name && name.trim()) { let created={id:`local-${Date.now()}`,icon:name.trim()[0].toUpperCase(),name:name.trim()}; if(supabase&&user.id){ const {data,error}=await supabase.from('servers').insert({name:name.trim(),icon:created.icon,owner_id:user.id}).select('id,name,icon').single(); if(error){alert('Не удалось создать сервер. Проверь права доступа.');return;} created={...created,id:data.id,dbId:data.id}; } servers.splice(servers.length - 1, 0, created); activeServerIndex=servers.length-2; savedChannelMap[created.id]=[{name:'общий',kind:'text'}]; saveChannelMap(); localStorage.setItem('vesselServers', JSON.stringify(servers)); localStorage.setItem('vesselActiveServer',activeServerIndex); activeChannelName='общий';activeChannelKind='text';currentDm=null;friendsOpen=false;render(); }
+      const name=prompt('Название нового сервера:');
+      if(name&&name.trim()){
+        if(!supabase||!user.id){alert('Нужна активная сессия Vessel.');return;}
+        const icon=name.trim()[0].toUpperCase();
+        const {data,error}=await supabase.from('servers').insert({name:name.trim(),icon,owner_id:user.id}).select('id,name,icon').single();
+        if(error){alert(`Не удалось создать сервер: ${error.message}`);return;}
+        window.__vesselServersLoaded=false;
+        await syncSupabaseServers(user);
+        activeServerIndex=Math.max(0,servers.findIndex(item=>item.id===data.id));
+        localStorage.setItem('vesselActiveServer',activeServerIndex);
+        serverMembers=[]; window.__vesselMembersServerId=null;
+        const selected=servers[activeServerIndex];
+        selected.__channelsLoaded=false;
+        await syncSupabaseChannels(selected);
+        await syncServerMembers(user,selected);
+      }
       return;
     }
     activeServerIndex=Number(server.dataset.serverIndex);localStorage.setItem('vesselActiveServer',activeServerIndex);activeChannelName='общий';activeChannelKind='text';activeChannelId=null;currentDm=null;activeDmId=null;friendsOpen=false;serverMembers=[];window.__vesselMembersServerId=null;render();syncSupabaseChannels(servers[activeServerIndex]);syncServerMembers(user,servers[activeServerIndex]);
