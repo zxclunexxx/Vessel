@@ -185,3 +185,25 @@ using (exists (select 1 from public.server_members m join public.channels c on c
 drop policy if exists "members can send channel messages" on public.messages;
 create policy "members can send channel messages" on public.messages for insert to authenticated
 with check ((select auth.uid()) = author_id and (exists (select 1 from public.server_members m join public.channels c on c.server_id=m.server_id where c.id=channel_id and m.user_id=(select auth.uid())) or exists (select 1 from public.channels c join public.servers s on s.id=c.server_id where c.id=channel_id and s.owner_id=(select auth.uid()))));
+
+-- Invite codes for joining servers.
+create table if not exists public.server_invites (
+  id uuid primary key default gen_random_uuid(),
+  server_id uuid not null references public.servers(id) on delete cascade,
+  created_by uuid not null references public.profiles(id) on delete cascade,
+  code text not null unique,
+  role text not null default 'member' check (role in ('admin','member')),
+  max_uses integer not null default 0 check (max_uses >= 0),
+  uses integer not null default 0 check (uses >= 0),
+  expires_at timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists server_invites_code_idx on public.server_invites(code);
+alter table public.server_invites enable row level security;
+drop policy if exists "members can read server invites" on public.server_invites;
+create policy "members can read server invites" on public.server_invites for select to authenticated using (true);
+drop policy if exists "owners can create server invites" on public.server_invites;
+create policy "owners can create server invites" on public.server_invites for insert to authenticated
+with check (created_by = (select auth.uid()) and exists (select 1 from public.servers s where s.id=server_id and s.owner_id=(select auth.uid())));
+drop policy if exists "owners can delete server invites" on public.server_invites;
+create policy "owners can delete server invites" on public.server_invites for delete to authenticated using (created_by = (select auth.uid()));
