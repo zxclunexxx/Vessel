@@ -148,3 +148,40 @@ drop policy if exists "senders can update dms" on public.direct_messages;
 create policy "senders can update dms" on public.direct_messages for update to authenticated
 using ((select auth.uid()) = sender_id)
 with check ((select auth.uid()) = sender_id);
+
+-- Server, channel and channel-message access.
+alter table public.servers enable row level security;
+alter table public.server_members enable row level security;
+alter table public.channels enable row level security;
+alter table public.messages enable row level security;
+
+drop policy if exists "server members can read servers" on public.servers;
+create policy "server members can read servers" on public.servers for select to authenticated
+using (owner_id = (select auth.uid()) or exists (select 1 from public.server_members m where m.server_id = id and m.user_id = (select auth.uid())));
+drop policy if exists "users can create own servers" on public.servers;
+create policy "users can create own servers" on public.servers for insert to authenticated
+with check (owner_id = (select auth.uid()));
+drop policy if exists "owners can update servers" on public.servers;
+create policy "owners can update servers" on public.servers for update to authenticated
+using (owner_id = (select auth.uid())) with check (owner_id = (select auth.uid()));
+
+drop policy if exists "members can read memberships" on public.server_members;
+create policy "members can read memberships" on public.server_members for select to authenticated
+using (user_id = (select auth.uid()) or exists (select 1 from public.server_members own where own.server_id = server_id and own.user_id = (select auth.uid())));
+drop policy if exists "owners can add members" on public.server_members;
+create policy "owners can add members" on public.server_members for insert to authenticated
+with check (exists (select 1 from public.servers s where s.id = server_id and s.owner_id = (select auth.uid())) or user_id = (select auth.uid()));
+
+drop policy if exists "members can read channels" on public.channels;
+create policy "members can read channels" on public.channels for select to authenticated
+using (exists (select 1 from public.server_members m where m.server_id = channels.server_id and m.user_id = (select auth.uid())) or exists (select 1 from public.servers s where s.id = channels.server_id and s.owner_id = (select auth.uid())));
+drop policy if exists "owners can create channels" on public.channels;
+create policy "owners can create channels" on public.channels for insert to authenticated
+with check (exists (select 1 from public.servers s where s.id = server_id and s.owner_id = (select auth.uid())));
+
+drop policy if exists "members can read channel messages" on public.messages;
+create policy "members can read channel messages" on public.messages for select to authenticated
+using (exists (select 1 from public.server_members m join public.channels c on c.server_id=m.server_id where c.id=channel_id and m.user_id=(select auth.uid())) or exists (select 1 from public.channels c join public.servers s on s.id=c.server_id where c.id=channel_id and s.owner_id=(select auth.uid())));
+drop policy if exists "members can send channel messages" on public.messages;
+create policy "members can send channel messages" on public.messages for insert to authenticated
+with check ((select auth.uid()) = author_id and (exists (select 1 from public.server_members m join public.channels c on c.server_id=m.server_id where c.id=channel_id and m.user_id=(select auth.uid())) or exists (select 1 from public.channels c join public.servers s on s.id=c.server_id where c.id=channel_id and s.owner_id=(select auth.uid()))));
