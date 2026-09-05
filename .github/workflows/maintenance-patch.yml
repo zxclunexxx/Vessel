@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'scripts/maintenance_patch.py'
+      - 'scripts/maintenance_cleanup.py'
       - 'scripts/maintenance_trigger.txt'
 
 permissions:
@@ -21,25 +22,13 @@ jobs:
         with:
           node-version: '24'
       - name: Apply patch
-        run: python scripts/maintenance_patch.py
+        run: |
+          python scripts/maintenance_patch.py
+          python scripts/maintenance_cleanup.py
       - name: Check JavaScript syntax
         run: node --check src/main.js
       - name: Check JavaScript as ES module
         run: node --input-type=module --check < src/main.js
-      - name: Diagnostic around Rolldown parse offset
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          text = Path('src/main.js').read_text(encoding='utf-8')
-          pos = 28023
-          line = text.count('\n', 0, pos) + 1
-          col = pos - text.rfind('\n', 0, pos)
-          print(f'offset={pos} line={line} col={col}')
-          for idx, value in enumerate(text.splitlines(), 1):
-              if 475 <= idx <= 505:
-                  print(f'{idx:4}: {value}')
-          print('context=', repr(text[max(0,pos-500):pos+500]))
-          PY
       - name: Install dependencies
         run: npm install --no-package-lock
       - name: Verify production build
