@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'scripts/maintenance_patch.py'
+      - 'scripts/maintenance_trigger.txt'
 
 permissions:
   contents: write
