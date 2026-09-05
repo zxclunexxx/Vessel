@@ -91,6 +91,19 @@ function connectRealtime() {
   window.__vesselRealtime = new EventSource(`${API_URL}/api/events`);
   window.__vesselRealtime.onmessage = event => { try { const item=JSON.parse(event.data); messages.push({name:item.name||'Участник',time:'только что',color:item.color||'#8b7cff',text:item.body||item.text}); localStorage.setItem('vesselMessages',JSON.stringify(messages)); render(); } catch {} };
 }
+function connectSupabaseRealtime(user) {
+  if (!supabase || !user?.id || window.__vesselRealtimeChannels) return;
+  window.__vesselRealtimeChannels = [
+    supabase.channel(`vessel-dm-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'direct_messages'},payload=>{
+      const row=payload.new;
+      if(activeDmId && (row.sender_id===activeDmId || row.receiver_id===activeDmId)){ window.__vesselDmLoaded=false; loadDirectMessages(user,activeDmId); }
+    }).subscribe(),
+    supabase.channel(`vessel-friends-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friend_requests',filter:`receiver_id=eq.${user.id}`},()=>{window.__vesselSocialLoaded=false;syncSocial(user).then(()=>{if(friendsOpen)render();});}).subscribe(),
+    supabase.channel(`vessel-channel-messages-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},payload=>{
+      if(payload.new.channel_id===activeChannelId && payload.new.author_id!==user.id){messages.push({name:'Участник',time:'только что',color:'#8b7cff',text:payload.new.body});render();}
+    }).subscribe()
+  ];
+}
 
 const savedUser = JSON.parse(localStorage.getItem('vesselUser') || 'null');
 
@@ -109,7 +122,7 @@ function render() {
     return;
   }
   const user = JSON.parse(localStorage.getItem('vesselUser'));
-  connectRealtime(); syncSupabaseMessages(); syncSupabaseServers(user); syncSupabaseChannels(); syncSocial(user); if (activeDmId && !window.__vesselDmLoaded) { window.__vesselDmLoaded=true; loadDirectMessages(user,activeDmId); }
+  connectRealtime(); connectSupabaseRealtime(user); syncSupabaseMessages(); syncSupabaseServers(user); syncSupabaseChannels(); syncSocial(user); if (activeDmId && !window.__vesselDmLoaded) { window.__vesselDmLoaded=true; loadDirectMessages(user,activeDmId); }
   document.querySelector('#app').innerHTML = `
     <main class="shell">
       <aside class="servers"><button class="server home-tab ${friendsOpen?'selected':''}" id="friends-tab" title="Друзья">👥</button>${servers.map((s,i) => `<button class="server ${!friendsOpen&&i===activeServerIndex?'selected':''} ${s.add ? 'add' : ''}" data-server-index="${i}" title="${s.name}">${s.icon}</button>`).join('')}</aside>
