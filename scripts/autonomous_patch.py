@@ -9,171 +9,131 @@ def replace_once(old,new,label):
         raise SystemExit(f'{label} anchor not found')
     text=text.replace(old,new,1)
 
-# Realtime updates must refresh outgoing requests too (accept/decline by the other user).
-old="""    supabase.channel(`vessel-friends-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friend_requests',filter:`receiver_id=eq.${user.id}`},()=>{window.__vesselSocialLoaded=false;syncSocial(user).then(()=>{if(friendsOpen)render();});}).subscribe(),
-    supabase.channel(`vessel-friendships-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friendships',filter:`user_id=eq.${user.id}`},()=>{window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),"""
-new="""    supabase.channel(`vessel-friends-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friend_requests',filter:`receiver_id=eq.${user.id}`},()=>{window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),
-    supabase.channel(`vessel-friend-requests-out-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friend_requests',filter:`sender_id=eq.${user.id}`},()=>{window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),
-    supabase.channel(`vessel-friendships-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friendships',filter:`user_id=eq.${user.id}`},()=>{window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),"""
-replace_once(old,new,'outgoing friend request realtime')
+# Voice peer connections should not linger indefinitely after a network disconnect.
+replace_once(
+"  pc.onconnectionstatechange=()=>{if(['failed','closed'].includes(pc.connectionState))removeVoicePeer(peerId);};",
+"""  pc.onconnectionstatechange=()=>{
+    if(['failed','closed'].includes(pc.connectionState)){removeVoicePeer(peerId);return;}
+    if(pc.connectionState==='disconnected')setTimeout(()=>{if(voicePeers.get(peerId)?.pc===pc&&pc.connectionState==='disconnected')removeVoicePeer(peerId);},3000);
+  };""",
+'voice peer disconnect cleanup')
 
-# Call invite delivery should be observable by callers instead of silently timing out on a transport error.
-old="""async function sendCallInvite(user, peerId, payload) {
-  if (!supabase || !user?.id || !peerId) return;
-  const channel = supabase.channel(callInboxName(peerId));
-  try {
-    await subscribeChannel(channel);
-    await channel.send({type:'broadcast', event:'call', payload:{from:user.id,to:peerId,...payload}});
-  } catch (error) {
-    console.warn('Call invite failed', error);
-  } finally {
-    await supabase.removeChannel(channel);
-  }
-}"""
-new="""async function sendCallInvite(user, peerId, payload) {
-  if (!supabase || !user?.id || !peerId) return false;
-  const channel = supabase.channel(callInboxName(peerId));
-  try {
-    await subscribeChannel(channel);
-    const result=await channel.send({type:'broadcast', event:'call', payload:{from:user.id,to:peerId,...payload}});
-    return result==='ok';
-  } catch (error) {
-    console.warn('Call invite failed', error);
-    return false;
-  } finally {
-    await supabase.removeChannel(channel).catch(()=>{});
-  }
-}"""
-replace_once(old,new,'call invite delivery')
-
-# A call-in-progress includes a local media stream during setup; do not accept a second invite then.
-replace_once("      if (callConnection || incomingCall) {","      if (callConnection || callStream || incomingCall) {",'incoming busy guard')
-
-# Avoid unhandled async signaling errors from WebRTC callbacks.
-replace_once("    if (callAccepted) sendCallSignal(user,peerId,{type:'ice',candidate:e.candidate},video);","    if (callAccepted) sendCallSignal(user,peerId,{type:'ice',candidate:e.candidate},video).catch(error=>console.warn('Call ICE send failed',error));",'call ICE error handling')
-replace_once("    await handleCallSignal(user,payload.from,payload.signal,payload.video);","    await handleCallSignal(user,payload.from,payload.signal,payload.video).catch(error=>{console.warn('Call signal failed',error);endCall(false);});",'call signal error handling')
-
-# Starting a DM call while an incoming call is waiting is ambiguous. Voice-room audio is released first.
-old="""async function startCall(video,user) {
-  if(!activeDmId||!supabase||!user?.id){vesselNotice('Открой личный чат с настоящим другом, чтобы начать звонок.','error');return;}
-  if(callConnection || callStream){await endCall(true);return;}
-  try {
-    callPeer=activeDmId; callPeerName=currentDm||'Пользователь'; callVideo=!!video; callAccepted=false; callOffer=null; localIceCandidates=[]; callMicEnabled=true; callCameraEnabled=!!video;
-    callStream=await navigator.mediaDevices.getUserMedia({audio:true,video:!!video});
-    prepareCallConnection(user,activeDmId,!!video);
-    const offer=await callConnection.createOffer();
-    await callConnection.setLocalDescription(offer);
-    callOffer=serialiseDescription(callConnection.localDescription);
-    await sendCallInvite(user,activeDmId,{type:'invite',name:user.name,video:callVideo,offer:callOffer});
-    if(callInviteTimer)clearTimeout(callInviteTimer);
-    callInviteTimer=setTimeout(()=>{
-      if(callConnection&&!callAccepted){vesselNotice('Пользователь не ответил на звонок.');endCall(true);}
-    },30000);
+# Voice room joining is mutually exclusive with a direct call and only becomes active after
+# the Realtime presence channel really subscribes. Errors/timeouts clean every local resource.
+old="""async function toggleVoiceRoom(user){
+  if(voiceStream && voiceChannelId===activeChannelId){await leaveVoiceRoom();return;}
+  if(!supabase||!user?.id||!activeChannelId||activeChannelKind!=='voice'){vesselNotice('Сначала открой голосовой канал.','error');return;}
+  if(voiceStream && voiceChannelId!==activeChannelId){await leaveVoiceRoom();}
+  try{
+    voiceStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+    voiceChannelId=activeChannelId;
+    voiceRoom=supabase.channel(`voice-${voiceChannelId}`,{config:{presence:{key:user.id}}});
+    voiceRoom.on('broadcast',{event:'voice-signal'},({payload})=>handleVoiceSignal(user,payload).catch(error=>console.warn('Voice signal failed',error)));
+    voiceRoom.on('presence',{event:'sync'},()=>syncVoicePresence(user).catch(error=>console.warn('Voice presence failed',error)));
+    voiceRoom.subscribe(async status=>{if(status==='SUBSCRIBED'){await voiceRoom.track({user_id:user.id,name:user.name});await syncVoicePresence(user);}});
     render();
-  } catch { await endCall(false); vesselNotice('Не удалось получить доступ к микрофону или камере.','error'); }
-}"""
-new="""async function startCall(video,user) {
-  if(!activeDmId||!supabase||!user?.id){vesselNotice('Открой личный чат с настоящим другом, чтобы начать звонок.','error');return;}
-  if(incomingCall){vesselNotice('Сначала ответь на входящий вызов или отклони его.','error');return;}
-  if(callConnection || callStream){await endCall(true);return;}
-  try {
-    if(voiceStream)await leaveVoiceRoom();
-    const peerId=activeDmId;
-    callPeer=peerId; callPeerName=currentDm||'Пользователь'; callVideo=!!video; callAccepted=false; callOffer=null; localIceCandidates=[]; callMicEnabled=true; callCameraEnabled=!!video;
-    callStream=await navigator.mediaDevices.getUserMedia({audio:true,video:!!video});
-    prepareCallConnection(user,peerId,!!video);
-    const offer=await callConnection.createOffer();
-    await callConnection.setLocalDescription(offer);
-    callOffer=serialiseDescription(callConnection.localDescription);
-    render();
-    const delivered=await sendCallInvite(user,peerId,{type:'invite',name:user.name,video:callVideo,offer:callOffer});
-    if(!delivered)throw new Error('CALL_INVITE_DELIVERY_FAILED');
-    if(callInviteTimer)clearTimeout(callInviteTimer);
-    callInviteTimer=setTimeout(()=>{
-      if(callConnection&&!callAccepted){vesselNotice('Пользователь не ответил на звонок.');endCall(true);}
-    },30000);
-  } catch(error) {
-    console.warn('Call start failed',error);
-    await endCall(false);
-    vesselNotice(error?.message==='CALL_INVITE_DELIVERY_FAILED'?'Не удалось доставить вызов. Попробуй ещё раз.':'Не удалось получить доступ к микрофону или камере.','error');
+  }catch(error){
+    console.warn('Voice join failed',error);voiceStream?.getTracks().forEach(track=>track.stop());voiceStream=null;voiceRoom=null;voiceChannelId=null;vesselNotice('Разреши Vessel доступ к микрофону.','error');
   }
 }"""
-replace_once(old,new,'outgoing call lifecycle')
-
-# Accepting a DM call leaves an active voice room first and verifies the accept signal was delivered.
-old="""async function acceptIncomingCall(user) {
-  if (!incomingCall || !user?.id) return;
-  const invite=incomingCall; incomingCall=null; callPeer=invite.from; callPeerName=invite.name; callVideo=invite.video; callAccepted=true; callMicEnabled=true; callCameraEnabled=invite.video;
-  activeDmId=invite.from; currentDm=invite.name; friendsOpen=false;
-  try {
-    callStream=await navigator.mediaDevices.getUserMedia({audio:true,video:callVideo});
-    await ensureCallChannel(user,callPeer);
-    await sendCallInvite(user,callPeer,{type:'accept',video:callVideo});
+new="""async function toggleVoiceRoom(user){
+  if(voiceStream && voiceChannelId===activeChannelId){await leaveVoiceRoom();return;}
+  if(!supabase||!user?.id||!activeChannelId||activeChannelKind!=='voice'){vesselNotice('Сначала открой голосовой канал.','error');return;}
+  if(callConnection||callStream||incomingCall){vesselNotice('Заверши личный звонок или отклони входящий вызов перед входом в голосовой канал.','error');return;}
+  if(voiceStream && voiceChannelId!==activeChannelId){await leaveVoiceRoom();}
+  let room=null;
+  try{
+    const targetChannelId=activeChannelId;
+    voiceStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+    voiceChannelId=targetChannelId;
+    room=supabase.channel(`voice-${targetChannelId}`,{config:{presence:{key:user.id}}});
+    voiceRoom=room;
+    room.on('broadcast',{event:'voice-signal'},({payload})=>handleVoiceSignal(user,payload).catch(error=>console.warn('Voice signal failed',error)));
+    room.on('presence',{event:'sync'},()=>{if(room===voiceRoom)syncVoicePresence(user).catch(error=>console.warn('Voice presence failed',error));});
+    await new Promise((resolve,reject)=>{
+      let settled=false;
+      const timer=setTimeout(()=>{if(!settled){settled=true;reject(new Error('VOICE_REALTIME_TIMEOUT'));}},10000);
+      room.subscribe(async status=>{
+        if(settled||room!==voiceRoom)return;
+        if(status==='SUBSCRIBED'){
+          settled=true;clearTimeout(timer);
+          try{await room.track({user_id:user.id,name:user.name});await syncVoicePresence(user);resolve();}
+          catch(error){reject(error);}
+          return;
+        }
+        if(['CHANNEL_ERROR','TIMED_OUT','CLOSED'].includes(status)){
+          settled=true;clearTimeout(timer);reject(new Error(`VOICE_REALTIME_${status}`));
+        }
+      });
+    });
     render();
-  } catch {
-    await sendCallInvite(user,callPeer,{type:'decline'});
-    await endCall(false);
-    vesselNotice('Не удалось получить доступ к микрофону или камере.','error');
+  }catch(error){
+    console.warn('Voice join failed',error);
+    voiceStream?.getTracks().forEach(track=>track.stop());voiceStream=null;
+    for(const peerId of [...voicePeers.keys()])removeVoicePeer(peerId);
+    voiceParticipants=[];voiceChannelId=null;
+    if(room&&supabase){try{await supabase.removeChannel(room);}catch{}}
+    if(voiceRoom===room)voiceRoom=null;
+    vesselNotice(error?.message?.startsWith('VOICE_REALTIME_')?'Не удалось подключиться к голосовой комнате. Попробуй ещё раз.':'Разреши Vessel доступ к микрофону.','error');
+    render();
   }
 }"""
-new="""async function acceptIncomingCall(user) {
-  if (!incomingCall || !user?.id) return;
-  const invite=incomingCall; incomingCall=null; callPeer=invite.from; callPeerName=invite.name; callVideo=invite.video; callAccepted=true; callMicEnabled=true; callCameraEnabled=invite.video;
-  activeDmId=invite.from; currentDm=invite.name; friendsOpen=false; window.__vesselDmLoaded=false;
-  try {
-    if(voiceStream)await leaveVoiceRoom();
-    callStream=await navigator.mediaDevices.getUserMedia({audio:true,video:callVideo});
-    await ensureCallChannel(user,callPeer);
-    const delivered=await sendCallInvite(user,callPeer,{type:'accept',video:callVideo});
-    if(!delivered)throw new Error('CALL_ACCEPT_DELIVERY_FAILED');
-    render();
-  } catch(error) {
-    console.warn('Call accept failed',error);
-    await sendCallInvite(user,callPeer,{type:'decline'});
-    await endCall(false);
-    vesselNotice(error?.message==='CALL_ACCEPT_DELIVERY_FAILED'?'Не удалось подтвердить вызов. Попробуйте снова.':'Не удалось получить доступ к микрофону или камере.','error');
-  }
-}"""
-replace_once(old,new,'incoming call lifecycle')
+replace_once(old,new,'voice room lifecycle')
 
-# Never fall back to a cached localStorage identity when sending a hangup signal.
-replace_once("  const user=savedUser || JSON.parse(localStorage.getItem('vesselUser')||'null');","  const user=savedUser;",'hangup authenticated identity')
+# Friends home keeps DM controls, but server-specific management/channel sections are visually absent.
+replace_once(
+"<div class=\"brand\"><span class=\"brand-mark\">◈</span><span>${friendsOpen?'Друзья':escapeHtml(activeServer?.name || 'Vessel')}</span><button class=\"more\">•••</button></div>",
+"<div class=\"brand\"><span class=\"brand-mark\">◈</span><span>${friendsOpen?'Друзья':escapeHtml(activeServer?.name || 'Vessel')}</span><button class=\"more ${friendsOpen?'hidden':''}\">•••</button></div>",
+'friends server menu visibility')
+replace_once(
+"<section class=\"channel-section\"><div class=\"section-title\">ТЕКСТОВЫЕ КАНАЛЫ <button id=\"channel-add\">＋</button></div>",
+"<section class=\"channel-section ${friendsOpen?'hidden':''}\"><div class=\"section-title\">ТЕКСТОВЫЕ КАНАЛЫ <button id=\"channel-add\">＋</button></div>",
+'text channel friends visibility')
+replace_once(
+"<section class=\"channel-section\"><div class=\"section-title\">ГОЛОСОВЫЕ КАНАЛЫ <button id=\"voice-add\">＋</button></div>",
+"<section class=\"channel-section ${friendsOpen?'hidden':''}\"><div class=\"section-title\">ГОЛОСОВЫЕ КАНАЛЫ <button id=\"voice-add\">＋</button></div>",
+'voice channel friends visibility')
+replace_once(
+"<button id=\"search-button\">⌕</button><button id=\"friends-button\" title=\"Друзья\">♧</button>",
+"<button id=\"search-button\" class=\"${friendsOpen?'hidden':''}\">⌕</button><button id=\"friends-button\" title=\"Друзья\" class=\"${friendsOpen?'hidden':''}\">♧</button>",
+'friends header utility visibility')
 
-# Friends home is its own navigation state, not a stale DM layered over a server channel.
-replace_once("  const canManageChannel=Boolean(!currentDm&&activeChannelId&&activeServer?.dbId&&activeServer.role==='owner');","  const canManageChannel=Boolean(!friendsOpen&&!currentDm&&activeChannelId&&activeServer?.dbId&&activeServer.role==='owner');",'friends channel settings isolation')
-replace_once("    : activeDmId ? `<button id=\"audio-call\" title=\"Аудиозвонок\">📞</button><button id=\"video-call\" title=\"Видеозвонок\">🎥</button>` : '';","    : (!friendsOpen&&activeDmId) ? `<button id=\"audio-call\" title=\"Аудиозвонок\">📞</button><button id=\"video-call\" title=\"Видеозвонок\">🎥</button>` : '';",'friends call isolation')
+# Prevent any programmatic/stale composer event from writing to a voice channel.
+replace_once(
+"} else { if(!activeChannelId){vesselNotice('Сначала выбери текстовый канал.','error');return;} const {error}=await supabase.from('messages').insert({channel_id:activeChannelId,author_id:user.id,body:text});",
+"} else { if(!activeChannelId||activeChannelKind!=='text'){vesselNotice('Сначала выбери текстовый канал.','error');return;} const {error}=await supabase.from('messages').insert({channel_id:activeChannelId,author_id:user.id,body:text});",
+'composer text channel guard')
 
-old="""<header class="chat-head"><div><h1><span>${currentDm?'@':activeChannelKind==='voice'?'⌁':'#'}</span> ${escapeHtml(currentDm || activeChannelName)}</h1><p>${currentDm?'Личная переписка':activeChannelKind==='voice'?'Голосовая комната':escapeHtml(activeServer?.name || 'Vessel')}</p></div><div class="head-actions"><button id="mobile-nav" title="Каналы">☰</button>${canManageChannel?`<button id="channel-settings" title="Настройки канала">•••</button>`:''}${callActions}<button id="join-voice" class="join-voice ${activeChannelKind==='voice'?'':'hidden'}">${voiceStream?(voiceChannelId===activeChannelId?'Выйти':'Переключиться'):'Войти'}</button><button id="mute-voice" class="join-voice ${voiceStream&&voiceChannelId===activeChannelId?'':'hidden'}">${voiceStream?.getAudioTracks()[0]?.enabled===false?'🔇':'🎙'}</button>"""
-new="""<header class="chat-head"><div><h1><span>${friendsOpen?'👥':currentDm?'@':activeChannelKind==='voice'?'⌁':'#'}</span> ${friendsOpen?'Друзья':escapeHtml(currentDm || activeChannelName)}</h1><p>${friendsOpen?'Личные контакты и заявки':currentDm?'Личная переписка':activeChannelKind==='voice'?'Голосовая комната':escapeHtml(activeServer?.name || 'Vessel')}</p></div><div class="head-actions"><button id="mobile-nav" title="Каналы">☰</button>${canManageChannel?`<button id="channel-settings" title="Настройки канала">•••</button>`:''}${callActions}<button id="join-voice" class="join-voice ${!friendsOpen&&activeChannelKind==='voice'?'':'hidden'}">${voiceStream?(voiceChannelId===activeChannelId?'Выйти':'Переключиться'):'Войти'}</button><button id="mute-voice" class="join-voice ${!friendsOpen&&voiceStream&&voiceChannelId===activeChannelId?'':'hidden'}">${voiceStream?.getAudioTracks()[0]?.enabled===false?'🔇':'🎙'}</button>"""
-replace_once(old,new,'friends header isolation')
+# Match profile UI validation with database constraints and give a useful client-side error.
+replace_once(
+"<label>Имя пользователя<input name=\"name\" value=\"${escapeHtml(user.name)}\" required minlength=\"2\" /></label>",
+"<label>Имя пользователя<input name=\"name\" value=\"${escapeHtml(user.name)}\" required minlength=\"2\" maxlength=\"32\" /></label>",
+'profile maxlength')
+replace_once(
+"    const status=String(data.get('status')||'online');\n    if(!name)return;",
+"    const status=String(data.get('status')||'online');\n    if(name.length<2||name.length>32){vesselNotice('Имя пользователя должно содержать от 2 до 32 символов.','error');return;}",
+'profile length validation')
 
-# In friends home, right sidebar should summarize friends instead of showing unrelated server members.
-replace_once("      <aside class=\"members\">${voiceStream?`<div class=\"voice-status\">🎙 В голосовой комнате: ${Math.max(1,voiceParticipants.length)}</div>`:''}${membersList}</aside>","      <aside class=\"members\">${friendsOpen?`<div class=\"members-title\">ДРУЗЬЯ — ${friends.length}</div><div class=\"dm-empty\">${friendRequests.length?`Входящих заявок: ${friendRequests.length}`:outgoingFriendRequests.length?`Исходящих заявок: ${outgoingFriendRequests.length}`:'Выбери друга, чтобы открыть личный чат.'}</div>`:`${voiceStream?`<div class=\"voice-status\">🎙 В голосовой комнате: ${Math.max(1,voiceParticipants.length)}</div>`:''}${membersList}`}</aside>",'friends sidebar isolation')
+# Stable server helper everywhere, including immediately after server creation.
+replace_once("        const selected=servers[activeServerIndex];","        const selected=getActiveServer();",'created server selection')
 
-old="""  document.querySelector('#friends-tab').addEventListener('click',()=>{friendsOpen=true;currentDm=null;render();});
-  document.querySelector('#friends-button').addEventListener('click',()=>{friendsOpen=true;currentDm=null;render();});"""
-new="""  const openFriendsHome=()=>{friendsOpen=true;currentDm=null;activeDmId=null;dmMessages=[];window.__vesselDmLoaded=false;render();};
-  document.querySelector('#friends-tab').addEventListener('click',openFriendsHome);
-  document.querySelector('#friends-button').addEventListener('click',openFriendsHome);"""
-replace_once(old,new,'friends navigation cleanup')
-
-# Guardrails: all high-risk regressions in this patch must be absent/present as expected.
-for forbidden in [
-    "savedUser || JSON.parse(localStorage.getItem('vesselUser')",
-    "if (callConnection || incomingCall)",
-    "#friends-tab').addEventListener('click',()=>{friendsOpen=true;currentDm=null;render();",
-]:
-    if forbidden in text:
-        raise SystemExit(f'call/friends regression remains: {forbidden}')
+# Voice header button listener should remain safe even if the UI is re-rendered during errors.
 for required in [
-    'vessel-friend-requests-out-',
-    "if(voiceStream)await leaveVoiceRoom();",
-    "if(incomingCall){vesselNotice('Сначала ответь на входящий вызов или отклони его.'",
+    "if(callConnection||callStream||incomingCall){vesselNotice('Заверши личный звонок",
+    "VOICE_REALTIME_TIMEOUT",
+    "activeChannelKind!=='text'",
+    "maxlength=\"32\"",
+    "const selected=getActiveServer();",
     "document.querySelector('#end-call')?.addEventListener('click',()=>endCall(true));",
-    'const openFriendsHome=()=>{friendsOpen=true;currentDm=null;activeDmId=null;',
 ]:
     if required not in text:
-        raise SystemExit(f'missing call/friends hardening: {required}')
+        raise SystemExit(f'missing final runtime hardening: {required}')
+for forbidden in [
+    "const selected=servers[activeServerIndex];",
+    "if(!activeChannelId){vesselNotice('Сначала выбери текстовый канал.'",
+]:
+    if forbidden in text:
+        raise SystemExit(f'stale runtime behavior remains: {forbidden}')
 
 path.write_text(text,encoding='utf-8')
-print('Applied friends home and call lifecycle hardening')
+print('Applied final voice and navigation hardening')
