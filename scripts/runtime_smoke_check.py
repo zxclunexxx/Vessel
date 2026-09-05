@@ -13,10 +13,14 @@ banned = [
     "confirm(",
     "alert(",
     "`${user.id}/${crypto.randomUUID()}-${safeName}`",
+    "savedChannelMap",
+    "activeDmId=isDm?null:activeDmId",
+    "localStorage.getItem('vesselActiveServer')",
+    "localStorage.setItem('vesselActiveServer',",
 ]
 found = [item for item in banned if item in main]
 if found:
-    raise SystemExit(f'Authenticated runtime contains banned prototype behavior: {found}')
+    raise SystemExit(f'Authenticated runtime contains banned prototype/stale state behavior: {found}')
 
 required = [
     'async function bootstrapAuth()',
@@ -30,10 +34,16 @@ required = [
     'function vesselListDialog(',
     'function vesselCodeDialog(',
     'function escapeHtml(',
+    'function getActiveServer()',
+    'function setActiveServer(serverOrId)',
+    "localStorage.getItem('vesselActiveServerId')",
     'callInviteTimer',
     'vessel-memberships-',
     'vessel-channels-',
     'data-remove-friend',
+    'data-accept-request',
+    'data-decline-request',
+    'data-cancel-request',
     'id="mobile-nav"',
     "createSignedUrl(path,60)",
     "activeChannelName = 'нет каналов'",
@@ -41,6 +51,8 @@ required = [
     "context=`channel/${activeChannelId}`",
     'async function cleanupFailedAttachment(attachment)',
     '25*1024*1024',
+    "document.querySelectorAll('.channel:not(.dm)')",
+    'activeDmId=null;',
 ]
 for item in required:
     if item not in main:
@@ -49,5 +61,20 @@ for item in required:
 # Keep the authenticated UI backed by database identities, not fake fallback people.
 if "savedUser = JSON.parse(localStorage.getItem('vesselUser')" in main:
     raise SystemExit('Runtime must not trust a cached localStorage user as an authenticated session')
+
+# Channel and DM state are mutually exclusive. The channel click handler must clear the DM id
+# before changing activeChannelId, otherwise channel messages can be sent to an old DM.
+channel_handler_start = main.find("document.querySelectorAll('.channel:not(.dm)')")
+if channel_handler_start < 0:
+    raise SystemExit('Missing server-channel click handler')
+channel_handler = main[channel_handler_start:channel_handler_start + 1200]
+if 'activeDmId=null;' not in channel_handler or 'activeChannelId=channelId;' not in channel_handler:
+    raise SystemExit('Channel handler does not isolate DM/channel state')
+if channel_handler.find('activeDmId=null;') > channel_handler.find('activeChannelId=channelId;'):
+    raise SystemExit('Channel handler must clear DM state before selecting a channel')
+
+# Stable database ids, not array positions, must be the persisted server identity.
+if "let activeServerId = localStorage.getItem('vesselActiveServerId')" not in main:
+    raise SystemExit('Active server must be persisted by stable database id')
 
 print('Vessel authenticated runtime smoke check passed')
