@@ -36,6 +36,12 @@ npm run android:apk
 ветки `main`. Готовый тестовый файл находится в запуске workflow
 `Build Vessel Android APK` в разделе **Artifacts** под именем `Vessel-debug-apk`.
 
+## Windows EXE
+
+Портативная Windows-версия собирается workflow `Build Vessel Windows EXE`.
+Готовый архив находится в разделе **Artifacts** под именем
+`Vessel-windows-exe`. После распаковки запускается файл `Vessel.exe`.
+
 ## Веб-версия
 
 Веб-версия публикуется автоматически через workflow `Deploy Vessel Web`.
