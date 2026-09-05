@@ -24,6 +24,17 @@ jobs:
         run: python scripts/maintenance_patch.py
       - name: Check JavaScript syntax
         run: node --check src/main.js
+      - name: Diagnostic around Rolldown parse offset
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('src/main.js').read_text(encoding='utf-8')
+          pos = 28023
+          line = text.count('\n', 0, pos) + 1
+          col = pos - text.rfind('\n', 0, pos)
+          print(f'offset={pos} line={line} col={col}')
+          print(repr(text[max(0,pos-500):pos+500]))
+          PY
       - name: Install dependencies
         run: npm install --no-package-lock
       - name: Verify production build
