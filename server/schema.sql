@@ -207,3 +207,22 @@ create policy "owners can create server invites" on public.server_invites for in
 with check (created_by = (select auth.uid()) and exists (select 1 from public.servers s where s.id=server_id and s.owner_id=(select auth.uid())));
 drop policy if exists "owners can delete server invites" on public.server_invites;
 create policy "owners can delete server invites" on public.server_invites for delete to authenticated using (created_by = (select auth.uid()));
+
+-- Private file storage used by message attachments.
+alter table public.messages add column if not exists attachments jsonb not null default '[]'::jsonb;
+insert into storage.buckets (id,name,public)
+values ('vessel-files','vessel-files',false)
+on conflict (id) do nothing;
+drop policy if exists "vessel files read for authenticated users" on storage.objects;
+create policy "vessel files read for authenticated users" on storage.objects for select to authenticated
+using (bucket_id = 'vessel-files');
+drop policy if exists "users upload vessel files" on storage.objects;
+create policy "users upload vessel files" on storage.objects for insert to authenticated
+with check (bucket_id = 'vessel-files' and (storage.foldername(name))[1] = (select auth.uid())::text);
+drop policy if exists "users update vessel files" on storage.objects;
+create policy "users update vessel files" on storage.objects for update to authenticated
+using (bucket_id = 'vessel-files' and owner_id = (select auth.uid())::text)
+with check (bucket_id = 'vessel-files' and owner_id = (select auth.uid())::text);
+drop policy if exists "users delete vessel files" on storage.objects;
+create policy "users delete vessel files" on storage.objects for delete to authenticated
+using (bucket_id = 'vessel-files' and owner_id = (select auth.uid())::text);
