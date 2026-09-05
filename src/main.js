@@ -34,9 +34,15 @@ async function loadChannelMessages(channelId) {
 }
 async function syncSupabaseServers(user) {
   if (!supabase || window.__vesselServersLoaded || !user?.id) return;
-  const {data} = await supabase.from('servers').select('id,name,icon').eq('owner_id',user.id).order('created_at');
-  if (data?.length) { servers=[...data.map(s=>({id:s.id,dbId:s.id,icon:s.icon,name:s.name})),{icon:'+',name:'Добавить сервер',add:true}]; render(); }
+  const {data:memberships} = await supabase.from('server_members').select('server_id,role').eq('user_id',user.id);
+  const memberIds=(memberships||[]).map(row=>row.server_id);
+  const [ownedResult,memberResult]=await Promise.all([
+    supabase.from('servers').select('id,name,icon,owner_id').eq('owner_id',user.id).order('created_at'),
+    memberIds.length ? supabase.from('servers').select('id,name,icon,owner_id').in('id',memberIds).order('created_at') : Promise.resolve({data:[]})
+  ]);
+  const all=[...(ownedResult.data||[]),...(memberResult.data||[]).filter(s=>!(ownedResult.data||[]).some(o=>o.id===s.id))];
   window.__vesselServersLoaded=true;
+  if (all.length) { servers=[...all.map(s=>({id:s.id,dbId:s.id,icon:s.icon,name:s.name,role:s.owner_id===user.id?'owner':(memberships||[]).find(m=>m.server_id===s.id)?.role||'member'})),{icon:'+',name:'Добавить сервер',add:true}]; if(activeServerIndex>=servers.length-1) activeServerIndex=0; render(); }
 }
 async function syncSupabaseChannels(server) {
   if (!supabase || !server?.dbId || server.__channelsLoaded) return;
@@ -113,6 +119,17 @@ function connectSupabaseRealtime(user) {
 
 const savedUser = JSON.parse(localStorage.getItem('vesselUser') || 'null');
 
+async function joinByInvite(code, user) {
+  if (!supabase || !user?.id) { alert('Для вступления нужен настоящий аккаунт.'); return false; }
+  const {data:invite,error}=await supabase.from('server_invites').select('id,server_id,role,max_uses,uses,expires_at').eq('code',code.trim().toUpperCase()).maybeSingle();
+  if(error || !invite){alert('Код приглашения не найден.');return false;}
+  if(invite.expires_at && new Date(invite.expires_at)<new Date()){alert('Срок действия приглашения истёк.');return false;}
+  if(invite.max_uses>0 && invite.uses>=invite.max_uses){alert('Приглашение больше недействительно.');return false;}
+  const {error:joinError}=await supabase.from('server_members').upsert({server_id:invite.server_id,user_id:user.id,role:invite.role});
+  if(joinError){alert('Не удалось вступить в сервер.');return false;}
+  window.__vesselServersLoaded=false; alert('Ты вступил в сервер.'); render(); return true;
+}
+
 function render() {
   if (!savedUser && !localStorage.getItem('vesselUser')) {
     document.querySelector('#app').innerHTML = `
@@ -161,6 +178,7 @@ function render() {
   document.querySelector('#notifications').addEventListener('click', e => { e.currentTarget.textContent = e.currentTarget.textContent === '🔔' ? '🔕' : '🔔'; e.currentTarget.title = e.currentTarget.textContent === '🔕' ? 'Уведомления выключены' : 'Уведомления включены'; });
   const modal = document.querySelector('#settings-modal');
   document.querySelector('#profile-settings').addEventListener('click', () => modal.classList.remove('hidden'));
+  document.querySelector('.more').addEventListener('click', async () => { const server=servers[activeServerIndex]; if(!server?.dbId||server.role!=='owner'){alert(`Твоя роль: ${server?.role||'участник'}. Создавать приглашения может только владелец.`);return;} const code=`VSL-${crypto.randomUUID().slice(0,8).toUpperCase()}`; const {error}=await supabase.from('server_invites').insert({server_id:server.dbId,created_by:user.id,code}); alert(error?'Не удалось создать приглашение.':`Код приглашения для сервера «${server.name}»:\n\n${code}\n\nПередай его другу.`); });
   const addChannel = async kind => { const name=prompt(kind==='voice'?'Название голосовой комнаты:':'Название нового канала:'); if(!name?.trim()) return; const server=servers[activeServerIndex]; const channels=serverChannels(); const created={name:name.trim(),kind}; if(supabase&&user.id&&server.dbId){ const {data,error}=await supabase.from('channels').insert({server_id:server.dbId,name:created.name,kind,position:channels.length}).select('id,name,kind,position').single(); if(error){alert('Не удалось создать канал. Проверь права доступа.');return;} created.id=data.id; activeChannelId=data.id; } savedChannelMap[server.id]=[...channels,created]; saveChannelMap(); activeChannelName=created.name; activeChannelKind=kind; currentDm=null; render(); };
   document.querySelector('#channel-add').addEventListener('click', () => addChannel('text'));
   document.querySelector('#voice-add').addEventListener('click', () => addChannel('voice'));
@@ -192,6 +210,7 @@ function render() {
   document.querySelectorAll('[data-call]').forEach(button=>button.addEventListener('click',()=>{currentDm=button.dataset.call;friendsOpen=false;startCall(false);}));
   document.querySelectorAll('.server[data-server-index]').forEach(server => server.addEventListener('click', async () => {
     if (server.classList.contains('add')) {
+      if(supabase&&user.id&&confirm('У тебя есть код приглашения? Нажми «ОК», чтобы вступить в сервер.')){const code=prompt('Введи код приглашения:');if(code?.trim()){await joinByInvite(code,user);return;}}
       const name = prompt('Название нового сервера:');
       if (name && name.trim()) { let created={id:`local-${Date.now()}`,icon:name.trim()[0].toUpperCase(),name:name.trim()}; if(supabase&&user.id){ const {data,error}=await supabase.from('servers').insert({name:name.trim(),icon:created.icon,owner_id:user.id}).select('id,name,icon').single(); if(error){alert('Не удалось создать сервер. Проверь права доступа.');return;} created={...created,id:data.id,dbId:data.id}; } servers.splice(servers.length - 1, 0, created); activeServerIndex=servers.length-2; savedChannelMap[created.id]=[{name:'общий',kind:'text'}]; saveChannelMap(); localStorage.setItem('vesselServers', JSON.stringify(servers)); localStorage.setItem('vesselActiveServer',activeServerIndex); activeChannelName='общий';activeChannelKind='text';currentDm=null;friendsOpen=false;render(); }
       return;
