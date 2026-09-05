@@ -18,9 +18,11 @@ jobs:
           python-version: '3.x'
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
       - name: Apply patch
         run: python scripts/maintenance_patch.py
+      - name: Check JavaScript syntax
+        run: node --check src/main.js
       - name: Install dependencies
         run: npm install --no-package-lock
       - name: Verify production build
