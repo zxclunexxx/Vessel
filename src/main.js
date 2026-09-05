@@ -20,6 +20,8 @@ let callOffer = null;
 let callVideo = false;
 let callAccepted = false;
 let incomingCall = null;
+let callMicEnabled = true;
+let callCameraEnabled = true;
 let activeServerIndex = Number(localStorage.getItem('vesselActiveServer') || 0);
 let activeChannelName = 'общий';
 let activeChannelKind = 'text';
@@ -221,9 +223,9 @@ async function handleCallSignal(user,peerId,signal,video) {
 }
 async function startCall(video,user) {
   if(!activeDmId||!supabase||!user?.id){alert('Открой личный чат с настоящим другом, чтобы начать звонок.');return;}
-  if(callConnection){endCall(true);return;}
+  if(callConnection || callStream){endCall(true);return;}
   try {
-    callPeer=activeDmId; callPeerName=currentDm||'Пользователь'; callVideo=!!video; callAccepted=false; callOffer=null; localIceCandidates=[];
+    callPeer=activeDmId; callPeerName=currentDm||'Пользователь'; callVideo=!!video; callAccepted=false; callOffer=null; localIceCandidates=[]; callMicEnabled=true; callCameraEnabled=!!video;
     callStream=await navigator.mediaDevices.getUserMedia({audio:true,video:!!video});
     prepareCallConnection(user,activeDmId,!!video);
     const offer=await callConnection.createOffer();
@@ -235,7 +237,7 @@ async function startCall(video,user) {
 }
 async function acceptIncomingCall(user) {
   if (!incomingCall || !user?.id) return;
-  const invite=incomingCall; incomingCall=null; callPeer=invite.from; callPeerName=invite.name; callVideo=invite.video; callAccepted=true;
+  const invite=incomingCall; incomingCall=null; callPeer=invite.from; callPeerName=invite.name; callVideo=invite.video; callAccepted=true; callMicEnabled=true; callCameraEnabled=invite.video;
   activeDmId=invite.from; currentDm=invite.name; friendsOpen=false;
   try {
     callStream=await navigator.mediaDevices.getUserMedia({audio:true,video:callVideo});
@@ -260,8 +262,24 @@ async function endCall(notify=true) {
   if(notify&&peer&&user?.id) await sendCallInvite(user,peer,{type:'bye'});
   const connection=callConnection; callConnection=null; connection?.close();
   callStream?.getTracks().forEach(track=>track.stop()); callStream=null; remoteCallStream=null; callPeer=null; pendingIceCandidates=[];
-  localIceCandidates=[]; callOffer=null; callVideo=false; callAccepted=false;
+  localIceCandidates=[]; callOffer=null; callVideo=false; callAccepted=false; callMicEnabled=true; callCameraEnabled=true;
   if(callChannel&&supabase){await supabase.removeChannel(callChannel);callChannel=null;}
+  render();
+}
+
+function toggleCallMicrophone() {
+  const track=callStream?.getAudioTracks()[0];
+  if(!track) return;
+  track.enabled=!track.enabled;
+  callMicEnabled=track.enabled;
+  render();
+}
+
+function toggleCallCamera() {
+  const track=callStream?.getVideoTracks()[0];
+  if(!track) return;
+  track.enabled=!track.enabled;
+  callCameraEnabled=track.enabled;
   render();
 }
 
@@ -343,6 +361,10 @@ function render() {
   }
   const user = JSON.parse(localStorage.getItem('vesselUser'));
   connectRealtime(); connectSupabaseRealtime(user); ensureCallInbox(user).catch(()=>{}); syncSupabaseMessages(); syncSupabaseServers(user); syncSupabaseChannels(servers[activeServerIndex]); syncSocial(user); syncNotifications(user); if (activeDmId && callConnection) { ensureCallChannel(user,activeDmId).catch(()=>{}); } if (activeDmId && !window.__vesselDmLoaded) { window.__vesselDmLoaded=true; loadDirectMessages(user,activeDmId); }
+  const callInProgress=Boolean(callConnection||callStream);
+  const callActions=callInProgress
+    ? `<button id="toggle-call-mic" class="call-control" title="${callMicEnabled?'Выключить микрофон':'Включить микрофон'}">${callMicEnabled?'🎙':'🔇'}</button>${callVideo?`<button id="toggle-call-camera" class="call-control" title="${callCameraEnabled?'Выключить камеру':'Включить камеру'}">${callCameraEnabled?'📷':'🚫'}</button>`:''}<button id="end-call" class="hangup" title="Завершить звонок">☎</button>`
+    : `<button id="audio-call" title="Аудиозвонок">📞</button><button id="video-call" title="Видеозвонок">🎥</button>`;
   document.querySelector('#app').innerHTML = `
     <main class="shell">
       <aside class="servers"><button class="server home-tab ${friendsOpen?'selected':''}" id="friends-tab" title="Друзья">👥</button>${servers.map((s,i) => `<button class="server ${!friendsOpen&&i===activeServerIndex?'selected':''} ${s.add ? 'add' : ''}" data-server-index="${i}" title="${s.name}">${s.icon}</button>`).join('')}</aside>
@@ -359,7 +381,7 @@ function render() {
         <div class="side-footer">Vessel v0.1 <span>●</span></div>
       </aside>
       <section class="chat">
-        <header class="chat-head"><div><h1><span>${currentDm?'@':activeChannelKind==='voice'?'⌁':'#'}</span> ${currentDm || activeChannelName}</h1><p>${currentDm?'Личная переписка':activeChannelKind==='voice'?'Голосовая комната':servers[activeServerIndex]?.name || 'Vessel'}</p></div><div class="head-actions"><button id="audio-call" title="Аудиозвонок">📞</button><button id="video-call" title="Видеозвонок">🎥</button><button id="join-voice" class="join-voice ${activeChannelKind==='voice'?'':'hidden'}">${voiceStream?'Выйти':'Войти'}</button><button id="mute-voice" class="join-voice ${voiceStream?'':'hidden'}">🎙</button><button id="camera-voice" class="join-voice ${voiceStream?'':'hidden'}">📷</button><button id="search-button">⌕</button><button id="friends-button" title="Друзья">♧</button><button id="notifications" title="Уведомления">🔔${notifications.filter(n=>!n.read_at).length?` <sup>${notifications.filter(n=>!n.read_at).length}</sup>`:''}</button><button id="head-settings">⚙</button></div></header>
+        <header class="chat-head"><div><h1><span>${currentDm?'@':activeChannelKind==='voice'?'⌁':'#'}</span> ${currentDm || activeChannelName}</h1><p>${currentDm?'Личная переписка':activeChannelKind==='voice'?'Голосовая комната':servers[activeServerIndex]?.name || 'Vessel'}</p></div><div class="head-actions">${callActions}<button id="join-voice" class="join-voice ${activeChannelKind==='voice'?'':'hidden'}">${voiceStream?'Выйти':'Войти'}</button><button id="mute-voice" class="join-voice ${voiceStream?'':'hidden'}">🎙</button><button id="camera-voice" class="join-voice ${voiceStream?'':'hidden'}">📷</button><button id="search-button">⌕</button><button id="friends-button" title="Друзья">♧</button><button id="notifications" title="Уведомления">🔔${notifications.filter(n=>!n.read_at).length?` <sup>${notifications.filter(n=>!n.read_at).length}</sup>`:''}</button><button id="head-settings">⚙</button></div></header>
         <video id="remote-video" class="remote-video ${remoteCallStream?'':'hidden'}" autoplay playsinline></video><video id="local-video" class="local-video ${voiceStream||callStream?'':'hidden'}" autoplay muted playsinline></video><div class="messages">${friendsOpen?`<div class="friends-view"><div class="friends-hero"><h2>Друзья</h2><button id="add-friend" class="primary">Найти пользователя</button></div>${friendRequests.map(request=>`<div class="friend-row request-row"><div class="avatar" style="background:#ffb45e">${(request.profiles?.username||'?')[0].toUpperCase()}</div><b>${request.profiles?.username||'Пользователь'}</b><span>Заявка</span><button data-accept-request="${request.id}" data-sender="${request.sender_id}">Принять</button></div>`).join('')}${friends.length ? friends.map(friend=>`<div class="friend-row"><div class="avatar" style="background:${friend.avatar_color||'#8b7cff'}">${friend.username[0].toUpperCase()}</div><b>${friend.username}</b><span>${friend.status||'в сети'}</span><button data-dm-id="${friend.id}" data-dm="${friend.username}">💬</button><button data-call-id="${friend.id}" data-call="${friend.username}">📞</button></div>`).join('') : `<p class="empty-state">Пока нет добавленных друзей. Нажми «Найти пользователя».</p>`}</div>`:`<div class="welcome"><div class="welcome-icon">${currentDm?'@':activeChannelKind==='voice'?'⌁':'#'}</div><h2>${currentDm?`Переписка с ${currentDm}`:`Добро пожаловать в ${activeChannelKind==='voice'?'':'#'}${activeChannelName}!`}</h2><p>${activeChannelKind==='voice'?'Подключись к комнате, чтобы общаться голосом.':'Здесь начинается ваше общение.'}</p></div>${(activeDmId?dmMessages:messages).map(m => `<article class="message"><div class="avatar" style="background:${m.color}">${m.name[0]}</div><div><div class="message-meta"><b>${m.name}</b><time>${m.time}</time></div><p>${m.text}</p></div></article>`).join('')}`}</div>
         <form class="composer ${friendsOpen?'hidden':''}"><button type="button" class="attach">＋</button><input placeholder="${currentDm?`Написать пользователю ${currentDm}`:`Написать в #${activeChannelName}`}" /><button type="button">☺</button><button type="submit" class="send">➤</button></form>
       </section>
@@ -403,8 +425,11 @@ function render() {
   document.querySelectorAll('[data-dm]').forEach(button=>button.addEventListener('click',()=>{currentDm=button.dataset.dm;activeDmId=button.dataset.dmId||null;friendsOpen=false;window.__vesselDmLoaded=false;render();}));
   document.querySelectorAll('[data-accept-request]').forEach(button=>button.addEventListener('click',async()=>{if(!supabase||!user.id)return;const sender=button.dataset.sender;await supabase.from('friend_requests').update({status:'accepted',updated_at:new Date().toISOString()}).eq('id',button.dataset.acceptRequest);await supabase.from('friendships').upsert([{user_id:user.id,friend_id:sender},{user_id:sender,friend_id:user.id}]);window.__vesselSocialLoaded=false;render();}));
   document.querySelector('#add-friend')?.addEventListener('click',async()=>{const query=prompt('Введи точное имя пользователя:');if(!query?.trim())return;if(!supabase||!user.id){alert('Войди через настоящий аккаунт, чтобы добавлять друзей.');return;}const {data:found}=await supabase.from('profiles').select('id,username').ilike('username',query.trim()).limit(1);if(!found?.[0]){alert('Пользователь не найден.');return;}if(found[0].id===user.id){alert('Нельзя добавить самого себя.');return;}const {error}=await supabase.from('friend_requests').upsert({sender_id:user.id,receiver_id:found[0].id,status:'pending'},{onConflict:'sender_id,receiver_id'});alert(error?'Не удалось отправить заявку.':`Заявка пользователю ${found[0].username} отправлена.`);});
-  document.querySelector('#audio-call').addEventListener('click',()=>startCall(false,user));
-  document.querySelector('#video-call').addEventListener('click',()=>startCall(true,user));
+  document.querySelector('#audio-call')?.addEventListener('click',()=>startCall(false,user));
+  document.querySelector('#video-call')?.addEventListener('click',()=>startCall(true,user));
+  document.querySelector('#end-call')?.addEventListener('click',()=>endCall(true));
+  document.querySelector('#toggle-call-mic')?.addEventListener('click',toggleCallMicrophone);
+  document.querySelector('#toggle-call-camera')?.addEventListener('click',toggleCallCamera);
   document.querySelectorAll('[data-call-id]').forEach(button=>button.addEventListener('click',()=>{currentDm=button.dataset.call;activeDmId=button.dataset.callId;friendsOpen=false;window.__vesselDmLoaded=false;render();startCall(false,user);}));
   document.querySelectorAll('.server[data-server-index]').forEach(server => server.addEventListener('click', async () => {
     if (server.classList.contains('add')) {
