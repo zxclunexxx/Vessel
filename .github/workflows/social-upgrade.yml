@@ -1,0 +1,31 @@
+name: Apply Vessel social upgrade
+
+on:
+  push:
+    paths:
+      - 'scripts/upgrade_social.py'
+
+permissions:
+  contents: write
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Apply social upgrade
+        run: python scripts/upgrade_social.py
+      - name: Commit generated changes
+        run: |
+          if git diff --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/main.js
+          git commit -m "Complete Vessel social and DM flow"
+          git push
