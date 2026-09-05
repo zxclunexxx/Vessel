@@ -34,6 +34,7 @@ let activeDmId = null;
 let friendsOpen = false;
 let friends = [];
 let friendRequests = [];
+let outgoingFriendRequests = [];
 let dmMessages = [];
 let notifications = [];
 let serverMembers = [];
@@ -191,20 +192,29 @@ async function findAndRequestFriend(user) {
   }
   const {error:sendError}=await supabase.from('friend_requests').upsert({sender_id:user.id,receiver_id:target.id,status:'pending',updated_at:new Date().toISOString()},{onConflict:'sender_id,receiver_id'});
   if(sendError){vesselNotice('Не удалось отправить заявку.','error');return;}
+  window.__vesselSocialLoaded=false;
+  await syncSocial(user);
   vesselNotice(`Заявка пользователю ${target.username} отправлена.`,'success');
 }
 
 async function syncSocial(user) {
   if (!supabase || !user?.id || window.__vesselSocialLoaded) return;
-  const {data: links} = await supabase.from('friendships').select('friend_id').eq('user_id', user.id);
+  const {data: links, error: linksError} = await supabase.from('friendships').select('friend_id').eq('user_id', user.id);
+  if(linksError){vesselNotice('Не удалось загрузить список друзей.','error');return;}
   const ids = (links || []).map(row => row.friend_id).filter(Boolean);
   friends = [];
   if (ids.length) {
-    const {data: profiles} = await supabase.from('profiles').select('id,username,avatar_color,status').in('id', ids);
+    const {data: profiles, error: profilesError} = await supabase.from('profiles').select('id,username,avatar_color,status').in('id', ids);
+    if(profilesError){vesselNotice('Не удалось загрузить профили друзей.','error');return;}
     friends = profiles || [];
   }
-  const {data: requests} = await supabase.from('friend_requests').select('id,sender_id,status,profiles!friend_requests_sender_id_fkey(username,avatar_color)').eq('receiver_id', user.id).eq('status','pending');
-  friendRequests = requests || [];
+  const [incomingResult,outgoingResult]=await Promise.all([
+    supabase.from('friend_requests').select('id,sender_id,status,created_at,profiles!friend_requests_sender_id_fkey(username,avatar_color)').eq('receiver_id', user.id).eq('status','pending').order('created_at',{ascending:false}),
+    supabase.from('friend_requests').select('id,receiver_id,status,created_at,profiles!friend_requests_receiver_id_fkey(username,avatar_color)').eq('sender_id', user.id).eq('status','pending').order('created_at',{ascending:false})
+  ]);
+  if(incomingResult.error||outgoingResult.error){vesselNotice('Не удалось загрузить заявки в друзья.','error');return;}
+  friendRequests = incomingResult.data || [];
+  outgoingFriendRequests = outgoingResult.data || [];
   window.__vesselSocialLoaded = true;
   if (document.querySelector('#app')) render();
 }
@@ -784,7 +794,7 @@ function render() {
       </aside>
       <section class="chat">
         <header class="chat-head"><div><h1><span>${currentDm?'@':activeChannelKind==='voice'?'⌁':'#'}</span> ${escapeHtml(currentDm || activeChannelName)}</h1><p>${currentDm?'Личная переписка':activeChannelKind==='voice'?'Голосовая комната':escapeHtml(servers[activeServerIndex]?.name || 'Vessel')}</p></div><div class="head-actions"><button id="mobile-nav" title="Каналы">☰</button>${canManageChannel?`<button id="channel-settings" title="Настройки канала">•••</button>`:''}${callActions}<button id="join-voice" class="join-voice ${activeChannelKind==='voice'?'':'hidden'}">${voiceStream?(voiceChannelId===activeChannelId?'Выйти':'Переключиться'):'Войти'}</button><button id="mute-voice" class="join-voice ${voiceStream&&voiceChannelId===activeChannelId?'':'hidden'}">${voiceStream?.getAudioTracks()[0]?.enabled===false?'🔇':'🎙'}</button><button id="search-button">⌕</button><button id="friends-button" title="Друзья">♧</button><button id="notifications" title="Уведомления">🔔${notifications.filter(n=>!n.read_at).length?` <sup>${notifications.filter(n=>!n.read_at).length}</sup>`:''}</button><button id="head-settings">⚙</button></div></header>
-        <video id="remote-video" class="remote-video ${remoteCallStream?'':'hidden'}" autoplay playsinline></video><video id="local-video" class="local-video ${callStream||voiceStream?.getVideoTracks().length?'':'hidden'}" autoplay muted playsinline></video><div class="messages">${friendsOpen?`<div class="friends-view"><div class="friends-hero"><h2>Друзья</h2><button id="add-friend" class="primary">Найти пользователя</button></div>${friendRequests.map(request=>`<div class="friend-row request-row"><div class="avatar" style="background:#ffb45e">${(request.profiles?.username||'?')[0].toUpperCase()}</div><b>${escapeHtml(request.profiles?.username||'Пользователь')}</b><span>Заявка</span><button data-accept-request="${request.id}" data-sender="${request.sender_id}">Принять</button><button class="danger compact" data-decline-request="${request.id}">Отклонить</button></div>`).join('')}${friends.length ? friends.map(friend=>`<div class="friend-row"><div class="avatar" style="background:${friend.avatar_color||'#8b7cff'}">${friend.username[0].toUpperCase()}</div><b>${escapeHtml(friend.username)}</b><span>${escapeHtml(statusLabel(friend.status))}</span><button data-dm-id="${friend.id}" data-dm="${escapeHtml(friend.username)}">💬</button><button data-call-id="${friend.id}" data-call="${escapeHtml(friend.username)}">📞</button><button class="danger compact" data-remove-friend="${friend.id}" title="Удалить из друзей">×</button></div>`).join('') : `<p class="empty-state">Пока нет добавленных друзей. Нажми «Найти пользователя».</p>`}</div>`:`<div class="welcome"><div class="welcome-icon">${currentDm?'@':activeChannelKind==='voice'?'⌁':'#'}</div><h2>${currentDm?`Переписка с ${escapeHtml(currentDm)}`:`Добро пожаловать в ${activeChannelKind==='voice'?'':'#'}${escapeHtml(activeChannelName)}!`}</h2><p>${activeChannelKind==='voice'?'Подключись к комнате, чтобы общаться голосом.':'Здесь начинается ваше общение.'}</p></div>${(activeDmId?dmMessages:messages).map(m => `<article class="message"><div class="avatar" style="background:${escapeHtml(m.color||'#8b7cff')}">${escapeHtml(m.name?.[0]||'?')}</div><div><div class="message-meta"><b>${escapeHtml(m.name)}</b><time>${escapeHtml(m.time)}</time></div><p>${escapeHtml(m.text)}</p>${attachmentMarkup(m.attachments)}</div></article>`).join('')}`}</div>
+        <video id="remote-video" class="remote-video ${remoteCallStream?'':'hidden'}" autoplay playsinline></video><video id="local-video" class="local-video ${callStream||voiceStream?.getVideoTracks().length?'':'hidden'}" autoplay muted playsinline></video><div class="messages">${friendsOpen?`<div class="friends-view"><div class="friends-hero"><h2>Друзья</h2><button id="add-friend" class="primary">Найти пользователя</button></div>${friendRequests.map(request=>`<div class="friend-row request-row"><div class="avatar" style="background:#ffb45e">${(request.profiles?.username||'?')[0].toUpperCase()}</div><b>${escapeHtml(request.profiles?.username||'Пользователь')}</b><span>Заявка</span><button data-accept-request="${request.id}" data-sender="${request.sender_id}">Принять</button><button class="danger compact" data-decline-request="${request.id}">Отклонить</button></div>`).join('')}${outgoingFriendRequests.map(request=>`<div class="friend-row outgoing-request-row"><div class="avatar" style="background:#5a6380">${escapeHtml((request.profiles?.username||'?')[0].toUpperCase())}</div><b>${escapeHtml(request.profiles?.username||'Пользователь')}</b><span class="pending-label">Ожидает подтверждения</span><button class="danger compact" data-cancel-request="${request.id}" title="Отменить заявку">×</button></div>`).join('')}${friends.length ? friends.map(friend=>`<div class="friend-row"><div class="avatar" style="background:${friend.avatar_color||'#8b7cff'}">${friend.username[0].toUpperCase()}</div><b>${escapeHtml(friend.username)}</b><span>${escapeHtml(statusLabel(friend.status))}</span><button data-dm-id="${friend.id}" data-dm="${escapeHtml(friend.username)}">💬</button><button data-call-id="${friend.id}" data-call="${escapeHtml(friend.username)}">📞</button><button class="danger compact" data-remove-friend="${friend.id}" title="Удалить из друзей">×</button></div>`).join('') : `<p class="empty-state">Пока нет добавленных друзей. Нажми «Найти пользователя».</p>`}</div>`:`<div class="welcome"><div class="welcome-icon">${currentDm?'@':activeChannelKind==='voice'?'⌁':'#'}</div><h2>${currentDm?`Переписка с ${escapeHtml(currentDm)}`:`Добро пожаловать в ${activeChannelKind==='voice'?'':'#'}${escapeHtml(activeChannelName)}!`}</h2><p>${activeChannelKind==='voice'?'Подключись к комнате, чтобы общаться голосом.':'Здесь начинается ваше общение.'}</p></div>${(activeDmId?dmMessages:messages).map(m => `<article class="message"><div class="avatar" style="background:${escapeHtml(m.color||'#8b7cff')}">${escapeHtml(m.name?.[0]||'?')}</div><div><div class="message-meta"><b>${escapeHtml(m.name)}</b><time>${escapeHtml(m.time)}</time></div><p>${escapeHtml(m.text)}</p>${attachmentMarkup(m.attachments)}</div></article>`).join('')}`}</div>
         <form class="composer ${friendsOpen||(!currentDm&&activeChannelKind==='voice')?'hidden':''}"><button type="button" class="attach">＋</button><input placeholder="${currentDm?`Написать пользователю ${escapeHtml(currentDm)}`:`Написать в #${escapeHtml(activeChannelName)}`}" /><button type="button" id="emoji-button" title="Эмодзи">☺</button><button type="submit" class="send">➤</button></form>
       </section>
       <aside class="members">${voiceStream?`<div class="voice-status">🎙 В голосовой комнате: ${Math.max(1,voiceParticipants.length)}</div>`:''}${membersList}</aside>
@@ -991,6 +1001,15 @@ function render() {
     if(error){vesselNotice(`Не удалось удалить друга: ${error.message}`,'error');return;}
     if(activeDmId===friendId){activeDmId=null;currentDm=null;dmMessages=[];window.__vesselDmLoaded=false;}
     window.__vesselSocialLoaded=false;await syncSocial(user);render();
+  }));
+  document.querySelectorAll('[data-cancel-request]').forEach(button=>button.addEventListener('click',async()=>{
+    if(!supabase||!user.id)return;
+    const requestId=button.dataset.cancelRequest;
+    const {error}=await supabase.from('friend_requests').delete().eq('id',requestId).eq('sender_id',user.id).eq('status','pending');
+    if(error){vesselNotice('Не удалось отменить заявку.','error');return;}
+    window.__vesselSocialLoaded=false;
+    await syncSocial(user);
+    vesselNotice('Заявка отменена.','success');
   }));
   document.querySelectorAll('[data-accept-request]').forEach(button=>button.addEventListener('click',async()=>{if(!supabase||!user.id)return;const {error}=await supabase.from('friend_requests').update({status:'accepted',updated_at:new Date().toISOString()}).eq('id',button.dataset.acceptRequest).eq('receiver_id',user.id);if(error){vesselNotice('Не удалось принять заявку.','error');return;}else vesselNotice('Заявка принята.','success');window.__vesselSocialLoaded=false;await syncSocial(user);render();}));
   document.querySelectorAll('[data-decline-request]').forEach(button=>button.addEventListener('click',async()=>{if(!supabase||!user.id)return;const {error}=await supabase.from('friend_requests').update({status:'declined',updated_at:new Date().toISOString()}).eq('id',button.dataset.declineRequest).eq('receiver_id',user.id);if(error){vesselNotice('Не удалось отклонить заявку.','error');return;}else vesselNotice('Заявка отклонена.');window.__vesselSocialLoaded=false;await syncSocial(user);render();}));
