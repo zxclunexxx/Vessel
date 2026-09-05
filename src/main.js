@@ -203,6 +203,15 @@ async function ensureCallInbox(user) {
       render();
       return;
     }
+    if (payload.type === 'bye') {
+      if (incomingCall?.from === payload.from) {
+        incomingCall = null;
+        render();
+        return;
+      }
+      if (payload.from === callPeer) await endCall(false);
+      return;
+    }
     if (payload.from !== callPeer) return;
     if (payload.type === 'accept') {
       callAccepted = true;
@@ -217,7 +226,6 @@ async function ensureCallInbox(user) {
       await endCall(false);
       return;
     }
-    if (payload.type === 'bye') await endCall(false);
   });
   try { await subscribeChannel(callInboxChannel); } catch (error) { console.warn('Call inbox failed', error); }
   return callInboxChannel;
@@ -255,12 +263,21 @@ function prepareCallConnection(user,peerId,video) {
   };
   callConnection.ontrack=e=>{remoteCallStream=e.streams[0];const el=document.querySelector('#remote-video');if(el){el.srcObject=remoteCallStream;el.play().catch(()=>{});} };
   const connection = callConnection;
-  callConnection.onconnectionstatechange=()=>{if(connection===callConnection&&['failed','closed'].includes(connection.connectionState)){endCall(false);}};
+  callConnection.onconnectionstatechange=()=>{
+    if(connection!==callConnection) return;
+    const state=connection.connectionState;
+    if(['failed','closed'].includes(state)){endCall(false);return;}
+    if(state==='disconnected'){
+      setTimeout(()=>{
+        if(connection===callConnection && connection.connectionState==='disconnected') endCall(false);
+      },3000);
+    }
+  };
   if(callStream) callStream.getTracks().forEach(track=>callConnection.addTrack(track,callStream));
   return callConnection;
 }
 async function handleCallSignal(user,peerId,signal,video) {
-  if(signal.type==='bye'){endCall(false);return;}
+  if(signal.type==='bye'){await endCall(false);return;}
   if(signal.type==='ice'){if(callConnection?.remoteDescription) await callConnection.addIceCandidate(signal.candidate); else pendingIceCandidates.push(signal.candidate);return;}
   if(signal.type==='offer'){
     callPeer=peerId; callPeerName=callPeerName||'Пользователь';
@@ -273,7 +290,7 @@ async function handleCallSignal(user,peerId,signal,video) {
 }
 async function startCall(video,user) {
   if(!activeDmId||!supabase||!user?.id){alert('Открой личный чат с настоящим другом, чтобы начать звонок.');return;}
-  if(callConnection || callStream){endCall(true);return;}
+  if(callConnection || callStream){await endCall(true);return;}
   try {
     callPeer=activeDmId; callPeerName=currentDm||'Пользователь'; callVideo=!!video; callAccepted=false; callOffer=null; localIceCandidates=[]; callMicEnabled=true; callCameraEnabled=!!video;
     callStream=await navigator.mediaDevices.getUserMedia({audio:true,video:!!video});
@@ -328,8 +345,17 @@ async function endCall(notify=true) {
   callMicEnabled=true;
   callCameraEnabled=true;
   render();
-  if(room&&supabase) supabase.removeChannel(room).catch(()=>{});
-  if(notify&&peer&&user?.id) sendCallInvite(user,peer,{type:'bye'}).catch(()=>{});
+  if(notify&&peer&&user?.id&&room?.__subscribed){
+    try {
+      await room.send({type:'broadcast',event:'signal',payload:{from:user.id,to:peer,signal:{type:'bye'},video:false}});
+    } catch(error) {
+      console.warn('Call room hangup signal failed',error);
+    }
+  }
+  if(notify&&peer&&user?.id){
+    try { await sendCallInvite(user,peer,{type:'bye'}); } catch(error) { console.warn('Call inbox hangup signal failed',error); }
+  }
+  if(room&&supabase){ try { await supabase.removeChannel(room); } catch {} }
 }
 
 function toggleCallMicrophone() {
