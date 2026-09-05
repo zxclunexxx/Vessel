@@ -77,11 +77,13 @@ async function syncSocial(user) {
   const {data: requests} = await supabase.from('friend_requests').select('id,sender_id,status,profiles!friend_requests_sender_id_fkey(username,avatar_color)').eq('receiver_id', user.id).eq('status','pending');
   friendRequests = requests || [];
   window.__vesselSocialLoaded = true;
+  if (document.querySelector('#app')) render();
 }
 async function syncNotifications(user) {
   if (!supabase || !user?.id || window.__vesselNotificationsLoaded) return;
   const {data}=await supabase.from('notifications').select('id,type,title,body,data,read_at,created_at').eq('user_id',user.id).order('created_at',{ascending:false}).limit(30);
   notifications=data||[]; window.__vesselNotificationsLoaded=true;
+  if (document.querySelector('#app')) render();
 }
 async function loadDirectMessages(user, friendId) {
   if (!supabase || !user?.id || !friendId) return;
@@ -365,6 +367,9 @@ function render() {
   const callActions=callInProgress
     ? `<button id="toggle-call-mic" class="call-control" title="${callMicEnabled?'Выключить микрофон':'Включить микрофон'}">${callMicEnabled?'🎙':'🔇'}</button>${callVideo?`<button id="toggle-call-camera" class="call-control" title="${callCameraEnabled?'Выключить камеру':'Включить камеру'}">${callCameraEnabled?'📷':'🚫'}</button>`:''}<button id="end-call" class="hangup" title="Завершить звонок">☎</button>`
     : `<button id="audio-call" title="Аудиозвонок">📞</button><button id="video-call" title="Видеозвонок">🎥</button>`;
+  const dmList=friends.length
+    ? friends.map(friend=>`<button class="channel dm ${activeDmId===friend.id?'active':''}" data-dm-id="${friend.id}" data-dm="${friend.username}"><div class="mini-avatar" style="background:${friend.avatar_color||'#8b7cff'}">${(friend.username||'?')[0].toUpperCase()}</div> ${friend.username} <em></em></button>`).join('')
+    : `<button class="channel dm" data-dm="Марк"><div class="mini-avatar" style="background:#8b7cff">М</div> Марк <em></em></button><button class="channel dm" data-dm="Лиза"><div class="mini-avatar" style="background:#ff7294">Л</div> Лиза <em></em></button>`;
   document.querySelector('#app').innerHTML = `
     <main class="shell">
       <aside class="servers"><button class="server home-tab ${friendsOpen?'selected':''}" id="friends-tab" title="Друзья">👥</button>${servers.map((s,i) => `<button class="server ${!friendsOpen&&i===activeServerIndex?'selected':''} ${s.add ? 'add' : ''}" data-server-index="${i}" title="${s.name}">${s.icon}</button>`).join('')}</aside>
@@ -372,7 +377,7 @@ function render() {
         <div class="brand"><span class="brand-mark">◈</span><span>${friendsOpen?'Друзья':servers[activeServerIndex]?.name || 'Vessel'}</span><button class="more">•••</button></div>
         <div class="user-card"><div class="avatar user-avatar">${user.name[0].toUpperCase()}</div><div><b>${user.name}</b><small>в сети</small></div><button class="icon-btn" id="profile-settings" title="Настройки">⚙</button></div>
         <section class="channel-section"><div class="section-title">ЛИЧНЫЕ СООБЩЕНИЯ <button id="dm-add">＋</button></div>
-          <button class="channel dm"><div class="mini-avatar" style="background:#8b7cff">М</div> Марк <em></em></button><button class="channel dm"><div class="mini-avatar" style="background:#ff7294">Л</div> Лиза <em></em></button>
+          ${dmList}
         </section>
         <section class="channel-section"><div class="section-title">ТЕКСТОВЫЕ КАНАЛЫ <button id="channel-add">＋</button></div>
           ${serverChannels().filter(c=>c.kind==='text').map((c,i)=>`<button class="channel ${!currentDm&&activeChannelKind==='text'&&c.name===activeChannelName?'active':''}" data-channel-id="${c.id||''}" data-channel-name="${c.name}" data-kind="text"><span>#</span> ${c.name}</button>`).join('')}
