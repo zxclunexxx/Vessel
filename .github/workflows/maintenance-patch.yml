@@ -24,6 +24,8 @@ jobs:
         run: python scripts/maintenance_patch.py
       - name: Check JavaScript syntax
         run: node --check src/main.js
+      - name: Check JavaScript as ES module
+        run: node --input-type=module --check < src/main.js
       - name: Diagnostic around Rolldown parse offset
         run: |
           python - <<'PY'
@@ -33,7 +35,10 @@ jobs:
           line = text.count('\n', 0, pos) + 1
           col = pos - text.rfind('\n', 0, pos)
           print(f'offset={pos} line={line} col={col}')
-          print(repr(text[max(0,pos-500):pos+500]))
+          for idx, value in enumerate(text.splitlines(), 1):
+              if 475 <= idx <= 505:
+                  print(f'{idx:4}: {value}')
+          print('context=', repr(text[max(0,pos-500):pos+500]))
           PY
       - name: Install dependencies
         run: npm install --no-package-lock
