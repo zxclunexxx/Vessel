@@ -273,7 +273,7 @@ async function startCall(video,user) {
     const offer=await callConnection.createOffer();
     await callConnection.setLocalDescription(offer);
     callOffer=serialiseDescription(callConnection.localDescription);
-    await sendCallInvite(user,activeDmId,{type:'invite',name:callPeerName,video:callVideo,offer:callOffer});
+    await sendCallInvite(user,activeDmId,{type:'invite',name:user.name,video:callVideo,offer:callOffer});
     render();
   } catch { await endCall(false); alert('Не удалось получить доступ к микрофону или камере.'); }
 }
@@ -299,14 +299,29 @@ async function rejectIncomingCall(user) {
   render();
 }
 async function endCall(notify=true) {
-  const user=JSON.parse(localStorage.getItem('vesselUser')||'null');
+  const user=savedUser || JSON.parse(localStorage.getItem('vesselUser')||'null');
   const peer=callPeer;
-  if(notify&&peer&&user?.id) await sendCallInvite(user,peer,{type:'bye'});
-  const connection=callConnection; callConnection=null; connection?.close();
-  callStream?.getTracks().forEach(track=>track.stop()); callStream=null; remoteCallStream=null; callPeer=null; pendingIceCandidates=[];
-  localIceCandidates=[]; callOffer=null; callVideo=false; callAccepted=false; callMicEnabled=true; callCameraEnabled=true;
-  if(callChannel&&supabase){await supabase.removeChannel(callChannel);callChannel=null;}
+  const room=callChannel;
+  const connection=callConnection;
+  callConnection=null;
+  callChannel=null;
+  connection?.close();
+  callStream?.getTracks().forEach(track=>track.stop());
+  remoteCallStream?.getTracks?.().forEach(track=>track.stop?.());
+  callStream=null;
+  remoteCallStream=null;
+  callPeer=null;
+  callPeerName='';
+  pendingIceCandidates=[];
+  localIceCandidates=[];
+  callOffer=null;
+  callVideo=false;
+  callAccepted=false;
+  callMicEnabled=true;
+  callCameraEnabled=true;
   render();
+  if(room&&supabase) supabase.removeChannel(room).catch(()=>{});
+  if(notify&&peer&&user?.id) sendCallInvite(user,peer,{type:'bye'}).catch(()=>{});
 }
 
 function toggleCallMicrophone() {
@@ -325,40 +340,19 @@ function toggleCallCamera() {
   render();
 }
 
-let servers = JSON.parse(localStorage.getItem('vesselServers') || 'null') || [
-  { icon: 'V', name: 'Vessel', active: true },
-  { icon: '🎮', name: 'Игры' },
-  { icon: '🎵', name: 'Музыка' },
-  { icon: '+', name: 'Добавить сервер', add: true },
-];
-servers = servers.map((server, index) => ({...server, id: server.id || `local-${index}`}));
-if (activeServerIndex >= servers.length - 1) activeServerIndex = 0;
+let servers = [{ id: 'add-server', icon: '+', name: 'Добавить сервер', add: true }];
+if (activeServerIndex < 0) activeServerIndex = 0;
 
 function serverChannels() {
   const server = servers[activeServerIndex];
-  const fallback = server?.name === 'Vessel'
-    ? [{name:'общий',kind:'text'},{name:'идеи-vessel',kind:'text'},{name:'музыка',kind:'text'},{name:'Lounge',kind:'voice'},{name:'Игровая',kind:'voice'}]
-    : [{name:'общий',kind:'text'}];
-  return savedChannelMap[server?.id] || fallback;
+  return savedChannelMap[server?.id] || [];
 }
 
 function saveChannelMap() {
   localStorage.setItem('vesselChannelMap', JSON.stringify(savedChannelMap));
 }
 
-const defaultMessages = [
-  { name: 'Марк', time: 'Сегодня в 11:42', color: '#8b7cff', text: 'Добро пожаловать в Vessel! Здесь можно общаться, создавать свои серверы и собирать команды.' },
-  { name: 'Лиза', time: 'Сегодня в 11:44', color: '#ff7294', text: 'Интерфейс выглядит очень круто 🔥' },
-  { name: 'Ты', time: 'Сегодня в 11:45', color: '#39d9a6', text: 'Это только начало. Скоро добавим голосовые комнаты и личные сообщения.' },
-];
-let messages = JSON.parse(localStorage.getItem('vesselMessages') || 'null') || defaultMessages;
-const API_URL = 'http://localhost:8080';
-
-function connectRealtime() {
-  if (window.__vesselRealtime || !window.EventSource) return;
-  window.__vesselRealtime = new EventSource(`${API_URL}/api/events`);
-  window.__vesselRealtime.onmessage = event => { try { const item=JSON.parse(event.data); messages.push({name:item.name||'Участник',time:'только что',color:item.color||'#8b7cff',text:item.body||item.text}); localStorage.setItem('vesselMessages',JSON.stringify(messages)); render(); } catch {} };
-}
+let messages = [];
 function connectSupabaseRealtime(user) {
   if (!supabase || !user?.id || window.__vesselRealtimeChannels) return;
   window.__vesselRealtimeChannels = [
@@ -367,6 +361,7 @@ function connectSupabaseRealtime(user) {
       if(activeDmId && (row.sender_id===activeDmId || row.receiver_id===activeDmId)){ window.__vesselDmLoaded=false; loadDirectMessages(user,activeDmId); }
     }).subscribe(),
     supabase.channel(`vessel-friends-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friend_requests',filter:`receiver_id=eq.${user.id}`},()=>{window.__vesselSocialLoaded=false;syncSocial(user).then(()=>{if(friendsOpen)render();});}).subscribe(),
+    supabase.channel(`vessel-friendships-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friendships',filter:`user_id=eq.${user.id}`},()=>{window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),
     supabase.channel(`vessel-channel-messages-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},payload=>{
       if(payload.new.channel_id===activeChannelId && payload.new.author_id!==user.id){messages.push({name:'Участник',time:'только что',color:'#8b7cff',text:payload.new.body});render();}
     }).subscribe(),
@@ -374,7 +369,54 @@ function connectSupabaseRealtime(user) {
   ];
 }
 
-const savedUser = JSON.parse(localStorage.getItem('vesselUser') || 'null');
+let savedUser = null;
+
+async function bootstrapAuth() {
+  if (!supabase) {
+    console.error('Supabase client is unavailable.');
+    savedUser = null;
+    return;
+  }
+
+  // One-time cleanup of the old prototype runtime. These keys previously allowed
+  // an unauthenticated local user and fake servers/messages to masquerade as real data.
+  if (localStorage.getItem('vesselRuntimeV2') !== '1') {
+    ['vesselUser','vesselToken','vesselServers','vesselMessages','vesselChannelMap','vesselActiveServer'].forEach(key => localStorage.removeItem(key));
+    localStorage.setItem('vesselRuntimeV2', '1');
+    activeServerIndex = 0;
+    Object.keys(savedChannelMap).forEach(key => delete savedChannelMap[key]);
+  }
+
+  const {data, error} = await supabase.auth.getSession();
+  if (error) {
+    console.error('Unable to restore Supabase session', error);
+    savedUser = null;
+    return;
+  }
+
+  const session = data?.session;
+  if (!session?.user) {
+    localStorage.removeItem('vesselUser');
+    localStorage.removeItem('vesselToken');
+    savedUser = null;
+    return;
+  }
+
+  const authUser = session.user;
+  const {data: profile, error: profileError} = await supabase.from('profiles').select('id,username,email,status,avatar_color').eq('id', authUser.id).maybeSingle();
+  if (profileError) console.warn('Profile load failed', profileError);
+
+  savedUser = {
+    id: authUser.id,
+    name: profile?.username || authUser.user_metadata?.username || authUser.email?.split('@')[0] || 'Пользователь',
+    email: profile?.email || authUser.email || '',
+    status: profile?.status || 'online',
+    avatarColor: profile?.avatar_color || '#8b7cff'
+  };
+  // Cache only. render() never trusts this value until getSession() succeeded.
+  localStorage.setItem('vesselUser', JSON.stringify(savedUser));
+}
+
 
 async function joinByInvite(code, user) {
   if (!supabase || !user?.id) { alert('Для вступления нужен настоящий аккаунт.'); return false; }
@@ -388,21 +430,64 @@ async function joinByInvite(code, user) {
 }
 
 function render() {
-  if (!savedUser && !localStorage.getItem('vesselUser')) {
+  if (!savedUser) {
     document.querySelector('#app').innerHTML = `
       <main class="auth-page"><div class="auth-glow"></div><section class="auth-card">
         <div class="auth-logo">◈</div><h1>Добро пожаловать<br><span>в Vessel</span></h1>
         <p class="auth-subtitle">Твоё пространство для общения,<br>команд и идей.</p>
-        <form class="auth-form"><label>Имя пользователя<input name="name" required minlength="2" placeholder="Например, Артём" /></label><label>Электронная почта<input name="email" type="email" required placeholder="you@example.com" /></label><label>Пароль<input name="password" type="password" required minlength="4" placeholder="Минимум 4 символа" /></label><button class="primary" type="submit">Создать аккаунт <span>→</span></button></form>
-        <div class="auth-divider"><span>или</span></div><button class="ghost" type="button" id="demo-login">Войти в демо-режим</button><button class="auth-switch" type="button" id="auth-switch">У меня уже есть аккаунт</button><small>Продолжая, ты принимаешь правила Vessel</small>
+        <form class="auth-form"><label>Имя пользователя<input name="name" required minlength="2" placeholder="Например, Артём" /></label><label>Электронная почта<input name="email" type="email" required placeholder="you@example.com" /></label><label>Пароль<input name="password" type="password" required minlength="6" placeholder="Минимум 6 символов" /></label><button class="primary" type="submit">Создать аккаунт <span>→</span></button></form>
+        <button class="auth-switch" type="button" id="auth-switch">У меня уже есть аккаунт</button><small>Продолжая, ты принимаешь правила Vessel</small>
       </section></main>`;
-    document.querySelector('.auth-form').addEventListener('submit', async e => { e.preventDefault(); const data = new FormData(e.currentTarget); const payload={name:data.get('name'),email:data.get('email'),password:data.get('password')}; try { if (!supabase) throw new Error(); const {data:result,error}=await supabase.auth.signUp({email:payload.email,password:payload.password,data:{username:payload.name}}); if(error) throw error; localStorage.setItem('vesselToken',result.session?.access_token||'pending'); localStorage.setItem('vesselUser', JSON.stringify({id:result.user?.id,name:payload.name,email:payload.email})); location.reload(); } catch { localStorage.setItem('vesselUser', JSON.stringify({name:payload.name,email:payload.email})); location.reload(); } });
-    document.querySelector('#demo-login').addEventListener('click', () => { localStorage.setItem('vesselUser', JSON.stringify({id:null,name:'Артём', email:'demo@vessel.app'})); location.reload(); });
-    document.querySelector('#auth-switch').addEventListener('click', () => { const form=document.querySelector('.auth-form'); form.innerHTML='<label>Электронная почта<input name="email" type="email" required placeholder="you@example.com" /></label><label>Пароль<input name="password" type="password" required minlength="4" placeholder="Твой пароль" /></label><button class="primary" type="submit">Войти <span>→</span></button>'; form.onsubmit=async e=>{e.preventDefault();const d=new FormData(form);try{const {data,error}=await supabase.auth.signInWithPassword({email:d.get('email'),password:d.get('password')});if(error)throw error;localStorage.setItem('vesselToken',data.session.access_token);localStorage.setItem('vesselUser',JSON.stringify({id:data.user.id,name:data.user.user_metadata.username||data.user.email.split('@')[0],email:data.user.email}));location.reload();}catch{alert('Не удалось войти. Проверь почту и пароль.');}}; });
+    const authForm = document.querySelector('.auth-form');
+    const authSwitch = document.querySelector('#auth-switch');
+    const setAuthMode = mode => {
+      authForm.dataset.mode = mode;
+      if (mode === 'login') {
+        authForm.innerHTML = '<label>Электронная почта<input name="email" type="email" required placeholder="you@example.com" /></label><label>Пароль<input name="password" type="password" required minlength="6" placeholder="Твой пароль" /></label><button class="primary" type="submit">Войти <span>→</span></button>';
+        authSwitch.textContent = 'Создать новый аккаунт';
+      } else {
+        authForm.innerHTML = '<label>Имя пользователя<input name="name" required minlength="2" placeholder="Например, Артём" /></label><label>Электронная почта<input name="email" type="email" required placeholder="you@example.com" /></label><label>Пароль<input name="password" type="password" required minlength="6" placeholder="Минимум 6 символов" /></label><button class="primary" type="submit">Создать аккаунт <span>→</span></button>';
+        authSwitch.textContent = 'У меня уже есть аккаунт';
+      }
+    };
+    authForm.addEventListener('submit', async e => {
+      e.preventDefault();
+      if (!supabase) { alert('Сервис авторизации временно недоступен.'); return; }
+      const form = e.currentTarget;
+      const data = new FormData(form);
+      const mode = form.dataset.mode || 'signup';
+      const submit = form.querySelector('button[type="submit"]');
+      submit.disabled = true;
+      try {
+        if (mode === 'login') {
+          const {error} = await supabase.auth.signInWithPassword({email:data.get('email'), password:data.get('password')});
+          if (error) throw error;
+          await bootstrapAuth();
+          render();
+          return;
+        }
+        const payload = {name:String(data.get('name') || '').trim(), email:String(data.get('email') || '').trim(), password:String(data.get('password') || '')};
+        const {data: result, error} = await supabase.auth.signUp({email:payload.email,password:payload.password,options:{data:{username:payload.name}}});
+        if (error) throw error;
+        if (!result.session) {
+          alert('Аккаунт создан. Если подтверждение почты включено, открой письмо от Vessel, а затем войди.');
+          setAuthMode('login');
+          return;
+        }
+        await bootstrapAuth();
+        render();
+      } catch (error) {
+        console.error('Authentication failed', error);
+        alert(error?.message || 'Не удалось выполнить авторизацию.');
+      } finally {
+        submit.disabled = false;
+      }
+    });
+    authSwitch.addEventListener('click', () => setAuthMode((authForm.dataset.mode || 'signup') === 'login' ? 'signup' : 'login'));
     return;
   }
-  const user = JSON.parse(localStorage.getItem('vesselUser'));
-  connectRealtime(); connectSupabaseRealtime(user); ensureCallInbox(user).catch(()=>{}); syncSupabaseMessages(); syncSupabaseServers(user); syncSupabaseChannels(servers[activeServerIndex]); syncServerMembers(user,servers[activeServerIndex]); syncSocial(user); syncNotifications(user); if (activeDmId && callConnection) { ensureCallChannel(user,activeDmId).catch(()=>{}); } if (activeDmId && !window.__vesselDmLoaded) { window.__vesselDmLoaded=true; loadDirectMessages(user,activeDmId); }
+  const user = savedUser;
+  connectSupabaseRealtime(user); ensureCallInbox(user).catch(()=>{}); syncSupabaseMessages(); syncSupabaseServers(user); syncSupabaseChannels(servers[activeServerIndex]); syncServerMembers(user,servers[activeServerIndex]); syncSocial(user); syncNotifications(user); if (activeDmId && callConnection) { ensureCallChannel(user,activeDmId).catch(()=>{}); } if (activeDmId && !window.__vesselDmLoaded) { window.__vesselDmLoaded=true; loadDirectMessages(user,activeDmId); }
   const callInProgress=Boolean(callConnection||callStream);
   const callActions=callInProgress
     ? `<button id="toggle-call-mic" class="call-control" title="${callMicEnabled?'Выключить микрофон':'Включить микрофон'}">${callMicEnabled?'🎙':'🔇'}</button>${callVideo?`<button id="toggle-call-camera" class="call-control" title="${callCameraEnabled?'Выключить камеру':'Включить камеру'}">${callCameraEnabled?'📷':'🚫'}</button>`:''}<button id="end-call" class="hangup" title="Завершить звонок">☎</button>`
@@ -435,7 +520,7 @@ function render() {
       </section>
       <aside class="members">${voiceStream?'<div class="voice-status">🎙 Ты в голосовой комнате</div>':''}${membersList}</aside>
     </main><div class="modal hidden" id="settings-modal"><div class="modal-card"><button class="modal-close" id="close-settings">×</button><h2>Настройки профиля</h2><p>Измени данные, которые видят другие участники Vessel.</p><form id="settings-form"><label>Имя пользователя<input name="name" value="${user.name}" required minlength="2" /></label><label>Статус<select name="status"><option>В сети</option><option>Не беспокоить</option><option>Отошёл</option></select></label><button class="primary" type="submit">Сохранить изменения</button></form><button class="danger" id="logout" type="button">Выйти из аккаунта</button></div></div>${incomingCall?`<div class="modal call-modal" id="incoming-call-modal"><div class="modal-card"><div class="call-avatar">${incomingCall.name[0]?.toUpperCase()||'?'}</div><h2>${incomingCall.video?'Видеозвонок':'Аудиозвонок'}</h2><p>${incomingCall.name} звонит тебе в Vessel.</p><div class="call-actions"><button class="danger" id="reject-call" type="button">Отклонить</button><button class="primary" id="accept-call" type="button">Принять</button></div></div></div>`:''}`;
-  document.querySelector('.composer').addEventListener('submit', async e => { e.preventDefault(); const input=e.currentTarget.querySelector('input'); if(input.value.trim()){ const text=input.value.trim(); if(activeDmId&&supabase&&user.id){ const {error}=await supabase.from('direct_messages').insert({sender_id:user.id,receiver_id:activeDmId,body:text}); if(error){alert('Не удалось отправить личное сообщение.');return;} dmMessages.push({name:user.name,time:'только что',color:'#39d9a6',text}); } else { messages.push({name:user.name,time:'только что',color:'#39d9a6',text}); localStorage.setItem('vesselMessages', JSON.stringify(messages)); if(supabase&&activeChannelId&&user.id) supabase.from('messages').insert({channel_id:activeChannelId,author_id:user.id,body:text}); fetch(`${API_URL}/api/messages`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:user.name,body:text,color:'#39d9a6'})}).catch(()=>{}); } input.value=''; render(); document.querySelector('.messages').scrollTop=99999; }});
+  document.querySelector('.composer').addEventListener('submit', async e => { e.preventDefault(); const input=e.currentTarget.querySelector('input'); const text=input.value.trim(); if(!text)return; if(!supabase||!user.id){alert('Нужна активная сессия Vessel.');return;} if(activeDmId){ const {error}=await supabase.from('direct_messages').insert({sender_id:user.id,receiver_id:activeDmId,body:text}); if(error){alert(`Не удалось отправить личное сообщение: ${error.message}`);return;} dmMessages.push({name:user.name,time:'только что',color:user.avatarColor||'#39d9a6',text}); } else { if(!activeChannelId){alert('Сначала выбери текстовый канал.');return;} const {error}=await supabase.from('messages').insert({channel_id:activeChannelId,author_id:user.id,body:text}); if(error){alert(`Не удалось отправить сообщение: ${error.message}`);return;} messages.push({name:user.name,time:'только что',color:user.avatarColor||'#39d9a6',text}); } input.value=''; render(); const list=document.querySelector('.messages'); if(list)list.scrollTop=list.scrollHeight; });
   document.querySelector('.attach').addEventListener('click', () => {
     const picker = document.createElement('input'); picker.type = 'file'; picker.accept = 'image/*,.pdf,.doc,.docx,.zip';
     picker.onchange = async () => { const file = picker.files[0]; if (!file) return; const attachment=await uploadVesselFile(file,user); if(!attachment)return; const body=`📎 ${file.name}`; if(activeChannelId&&user.id){const {error}=await supabase.from('messages').insert({channel_id:activeChannelId,author_id:user.id,body,attachments:[attachment]});if(error){alert('Файл загрузился, но сообщение не отправилось.');return;}} messages.push({name:user.name,time:'только что',color:'#39d9a6',text:body}); localStorage.setItem('vesselMessages', JSON.stringify(messages)); render(); };
@@ -489,5 +574,5 @@ function render() {
     activeServerIndex=Number(server.dataset.serverIndex);localStorage.setItem('vesselActiveServer',activeServerIndex);activeChannelName='общий';activeChannelKind='text';activeChannelId=null;currentDm=null;activeDmId=null;friendsOpen=false;serverMembers=[];window.__vesselMembersServerId=null;render();syncSupabaseChannels(servers[activeServerIndex]);syncServerMembers(user,servers[activeServerIndex]);
   }));
 }
-render();
+bootstrapAuth().then(render).catch(error=>{console.error('Vessel bootstrap failed',error);savedUser=null;render();});
 setInterval(()=>{const video=document.querySelector('#local-video');const stream=callStream||voiceStream;if(video&&stream&&video.srcObject!==stream){video.srcObject=stream;video.play().catch(()=>{});}const remote=document.querySelector('#remote-video');if(remote&&remoteCallStream&&remote.srcObject!==remoteCallStream){remote.srcObject=remoteCallStream;remote.play().catch(()=>{});}},500);
