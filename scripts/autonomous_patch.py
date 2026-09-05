@@ -9,131 +9,62 @@ def replace_once(old,new,label):
         raise SystemExit(f'{label} anchor not found')
     text=text.replace(old,new,1)
 
-# Voice peer connections should not linger indefinitely after a network disconnect.
-replace_once(
-"  pc.onconnectionstatechange=()=>{if(['failed','closed'].includes(pc.connectionState))removeVoicePeer(peerId);};",
-"""  pc.onconnectionstatechange=()=>{
-    if(['failed','closed'].includes(pc.connectionState)){removeVoicePeer(peerId);return;}
-    if(pc.connectionState==='disconnected')setTimeout(()=>{if(voicePeers.get(peerId)?.pc===pc&&pc.connectionState==='disconnected')removeVoicePeer(peerId);},3000);
-  };""",
-'voice peer disconnect cleanup')
+# Server renames/icons and profile status/name changes should propagate to every authorized
+# open client instead of requiring a reload.
+old="""    supabase.channel(`vessel-channel-messages-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},payload=>{
+      if(payload.new.channel_id===activeChannelId && payload.new.author_id!==user.id)loadChannelMessages(activeChannelId).catch(error=>console.warn('Message refresh failed',error));
+    }).subscribe(),
+    supabase.channel(`vessel-notifications-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{notifications=[payload.new,...notifications];render();}).subscribe()
+"""
+new="""    supabase.channel(`vessel-channel-messages-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},payload=>{
+      if(payload.new.channel_id===activeChannelId && payload.new.author_id!==user.id)loadChannelMessages(activeChannelId).catch(error=>console.warn('Message refresh failed',error));
+    }).subscribe(),
+    supabase.channel(`vessel-profiles-${user.id}`).on('postgres_changes',{event:'UPDATE',schema:'public',table:'profiles'},payload=>{
+      const row=payload.new;
+      if(!row?.id)return;
+      let changed=false;
+      if(savedUser?.id===row.id){
+        savedUser={...savedUser,name:row.username||savedUser.name,status:row.status||savedUser.status,avatarColor:row.avatar_color||savedUser.avatarColor};
+        localStorage.setItem('vesselUser',JSON.stringify(savedUser));
+        changed=true;
+      }
+      const friend=friends.find(item=>item.id===row.id);
+      if(friend){friend.username=row.username||friend.username;friend.status=row.status||friend.status;friend.avatar_color=row.avatar_color||friend.avatar_color;changed=true;}
+      const member=serverMembers.find(item=>item.id===row.id);
+      if(member){member.username=row.username||member.username;member.status=row.status||member.status;member.avatar_color=row.avatar_color||member.avatar_color;changed=true;}
+      if(activeDmId===row.id&&row.username){currentDm=row.username;changed=true;}
+      if(changed)render();
+    }).subscribe(),
+    supabase.channel(`vessel-servers-${user.id}`).on('postgres_changes',{event:'UPDATE',schema:'public',table:'servers'},payload=>{
+      const row=payload.new;
+      const server=row?.id?servers.find(item=>item.id===row.id):null;
+      if(!server)return;
+      server.name=row.name||server.name;
+      server.icon=row.icon||server.icon;
+      render();
+    }).subscribe(),
+    supabase.channel(`vessel-notifications-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{notifications=[payload.new,...notifications];render();}).subscribe()
+"""
+replace_once(old,new,'profile/server realtime insertion')
 
-# Voice room joining is mutually exclusive with a direct call and only becomes active after
-# the Realtime presence channel really subscribes. Errors/timeouts clean every local resource.
-old="""async function toggleVoiceRoom(user){
-  if(voiceStream && voiceChannelId===activeChannelId){await leaveVoiceRoom();return;}
-  if(!supabase||!user?.id||!activeChannelId||activeChannelKind!=='voice'){vesselNotice('Сначала открой голосовой канал.','error');return;}
-  if(voiceStream && voiceChannelId!==activeChannelId){await leaveVoiceRoom();}
-  try{
-    voiceStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
-    voiceChannelId=activeChannelId;
-    voiceRoom=supabase.channel(`voice-${voiceChannelId}`,{config:{presence:{key:user.id}}});
-    voiceRoom.on('broadcast',{event:'voice-signal'},({payload})=>handleVoiceSignal(user,payload).catch(error=>console.warn('Voice signal failed',error)));
-    voiceRoom.on('presence',{event:'sync'},()=>syncVoicePresence(user).catch(error=>console.warn('Voice presence failed',error)));
-    voiceRoom.subscribe(async status=>{if(status==='SUBSCRIBED'){await voiceRoom.track({user_id:user.id,name:user.name});await syncVoicePresence(user);}});
-    render();
-  }catch(error){
-    console.warn('Voice join failed',error);voiceStream?.getTracks().forEach(track=>track.stop());voiceStream=null;voiceRoom=null;voiceChannelId=null;vesselNotice('Разреши Vessel доступ к микрофону.','error');
-  }
-}"""
-new="""async function toggleVoiceRoom(user){
-  if(voiceStream && voiceChannelId===activeChannelId){await leaveVoiceRoom();return;}
-  if(!supabase||!user?.id||!activeChannelId||activeChannelKind!=='voice'){vesselNotice('Сначала открой голосовой канал.','error');return;}
-  if(callConnection||callStream||incomingCall){vesselNotice('Заверши личный звонок или отклони входящий вызов перед входом в голосовой канал.','error');return;}
-  if(voiceStream && voiceChannelId!==activeChannelId){await leaveVoiceRoom();}
-  let room=null;
-  try{
-    const targetChannelId=activeChannelId;
-    voiceStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
-    voiceChannelId=targetChannelId;
-    room=supabase.channel(`voice-${targetChannelId}`,{config:{presence:{key:user.id}}});
-    voiceRoom=room;
-    room.on('broadcast',{event:'voice-signal'},({payload})=>handleVoiceSignal(user,payload).catch(error=>console.warn('Voice signal failed',error)));
-    room.on('presence',{event:'sync'},()=>{if(room===voiceRoom)syncVoicePresence(user).catch(error=>console.warn('Voice presence failed',error));});
-    await new Promise((resolve,reject)=>{
-      let settled=false;
-      const timer=setTimeout(()=>{if(!settled){settled=true;reject(new Error('VOICE_REALTIME_TIMEOUT'));}},10000);
-      room.subscribe(async status=>{
-        if(settled||room!==voiceRoom)return;
-        if(status==='SUBSCRIBED'){
-          settled=true;clearTimeout(timer);
-          try{await room.track({user_id:user.id,name:user.name});await syncVoicePresence(user);resolve();}
-          catch(error){reject(error);}
-          return;
-        }
-        if(['CHANNEL_ERROR','TIMED_OUT','CLOSED'].includes(status)){
-          settled=true;clearTimeout(timer);reject(new Error(`VOICE_REALTIME_${status}`));
-        }
-      });
-    });
-    render();
-  }catch(error){
-    console.warn('Voice join failed',error);
-    voiceStream?.getTracks().forEach(track=>track.stop());voiceStream=null;
-    for(const peerId of [...voicePeers.keys()])removeVoicePeer(peerId);
-    voiceParticipants=[];voiceChannelId=null;
-    if(room&&supabase){try{await supabase.removeChannel(room);}catch{}}
-    if(voiceRoom===room)voiceRoom=null;
-    vesselNotice(error?.message?.startsWith('VOICE_REALTIME_')?'Не удалось подключиться к голосовой комнате. Попробуй ещё раз.':'Разреши Vessel доступ к микрофону.','error');
-    render();
-  }
-}"""
-replace_once(old,new,'voice room lifecycle')
+# When the current user edits profile settings, update the authenticated local state only after
+# the database confirms the write; remote clients then receive the same change through Realtime.
+old="""    const {error}=await supabase.from('profiles').update({username:name,status}).eq('id',user.id);
+    if(error){vesselNotice(`Не удалось сохранить профиль: ${error.message}`,'error');return;}
+    savedUser={...user,name,status};localStorage.setItem('vesselUser',JSON.stringify(savedUser));modal.classList.add('hidden');render();"""
+new="""    const {data:updated,error}=await supabase.from('profiles').update({username:name,status}).eq('id',user.id).select('username,status,avatar_color').single();
+    if(error){
+      const duplicate=error.code==='23505';
+      vesselNotice(duplicate?'Это имя пользователя уже занято.':`Не удалось сохранить профиль: ${error.message}`,'error');
+      return;
+    }
+    savedUser={...user,name:updated?.username||name,status:updated?.status||status,avatarColor:updated?.avatar_color||user.avatarColor};
+    localStorage.setItem('vesselUser',JSON.stringify(savedUser));modal.classList.add('hidden');render();"""
+replace_once(old,new,'confirmed profile update')
 
-# Friends home keeps DM controls, but server-specific management/channel sections are visually absent.
-replace_once(
-"<div class=\"brand\"><span class=\"brand-mark\">◈</span><span>${friendsOpen?'Друзья':escapeHtml(activeServer?.name || 'Vessel')}</span><button class=\"more\">•••</button></div>",
-"<div class=\"brand\"><span class=\"brand-mark\">◈</span><span>${friendsOpen?'Друзья':escapeHtml(activeServer?.name || 'Vessel')}</span><button class=\"more ${friendsOpen?'hidden':''}\">•••</button></div>",
-'friends server menu visibility')
-replace_once(
-"<section class=\"channel-section\"><div class=\"section-title\">ТЕКСТОВЫЕ КАНАЛЫ <button id=\"channel-add\">＋</button></div>",
-"<section class=\"channel-section ${friendsOpen?'hidden':''}\"><div class=\"section-title\">ТЕКСТОВЫЕ КАНАЛЫ <button id=\"channel-add\">＋</button></div>",
-'text channel friends visibility')
-replace_once(
-"<section class=\"channel-section\"><div class=\"section-title\">ГОЛОСОВЫЕ КАНАЛЫ <button id=\"voice-add\">＋</button></div>",
-"<section class=\"channel-section ${friendsOpen?'hidden':''}\"><div class=\"section-title\">ГОЛОСОВЫЕ КАНАЛЫ <button id=\"voice-add\">＋</button></div>",
-'voice channel friends visibility')
-replace_once(
-"<button id=\"search-button\">⌕</button><button id=\"friends-button\" title=\"Друзья\">♧</button>",
-"<button id=\"search-button\" class=\"${friendsOpen?'hidden':''}\">⌕</button><button id=\"friends-button\" title=\"Друзья\" class=\"${friendsOpen?'hidden':''}\">♧</button>",
-'friends header utility visibility')
-
-# Prevent any programmatic/stale composer event from writing to a voice channel.
-replace_once(
-"} else { if(!activeChannelId){vesselNotice('Сначала выбери текстовый канал.','error');return;} const {error}=await supabase.from('messages').insert({channel_id:activeChannelId,author_id:user.id,body:text});",
-"} else { if(!activeChannelId||activeChannelKind!=='text'){vesselNotice('Сначала выбери текстовый канал.','error');return;} const {error}=await supabase.from('messages').insert({channel_id:activeChannelId,author_id:user.id,body:text});",
-'composer text channel guard')
-
-# Match profile UI validation with database constraints and give a useful client-side error.
-replace_once(
-"<label>Имя пользователя<input name=\"name\" value=\"${escapeHtml(user.name)}\" required minlength=\"2\" /></label>",
-"<label>Имя пользователя<input name=\"name\" value=\"${escapeHtml(user.name)}\" required minlength=\"2\" maxlength=\"32\" /></label>",
-'profile maxlength')
-replace_once(
-"    const status=String(data.get('status')||'online');\n    if(!name)return;",
-"    const status=String(data.get('status')||'online');\n    if(name.length<2||name.length>32){vesselNotice('Имя пользователя должно содержать от 2 до 32 символов.','error');return;}",
-'profile length validation')
-
-# Stable server helper everywhere, including immediately after server creation.
-replace_once("        const selected=servers[activeServerIndex];","        const selected=getActiveServer();",'created server selection')
-
-# Voice header button listener should remain safe even if the UI is re-rendered during errors.
-for required in [
-    "if(callConnection||callStream||incomingCall){vesselNotice('Заверши личный звонок",
-    "VOICE_REALTIME_TIMEOUT",
-    "activeChannelKind!=='text'",
-    "maxlength=\"32\"",
-    "const selected=getActiveServer();",
-    "document.querySelector('#end-call')?.addEventListener('click',()=>endCall(true));",
-]:
+for required in ['vessel-profiles-${user.id}','vessel-servers-${user.id}',"error.code==='23505'",'.select(\'username,status,avatar_color\').single()']:
     if required not in text:
-        raise SystemExit(f'missing final runtime hardening: {required}')
-for forbidden in [
-    "const selected=servers[activeServerIndex];",
-    "if(!activeChannelId){vesselNotice('Сначала выбери текстовый канал.'",
-]:
-    if forbidden in text:
-        raise SystemExit(f'stale runtime behavior remains: {forbidden}')
+        raise SystemExit(f'missing profile/server realtime hardening: {required}')
 
 path.write_text(text,encoding='utf-8')
-print('Applied final voice and navigation hardening')
+print('Applied realtime profile and server synchronization')
