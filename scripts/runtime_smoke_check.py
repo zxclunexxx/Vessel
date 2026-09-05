@@ -17,6 +17,8 @@ banned = [
     "activeDmId=isDm?null:activeDmId",
     "localStorage.getItem('vesselActiveServer')",
     "localStorage.setItem('vesselActiveServer',",
+    "savedUser || JSON.parse(localStorage.getItem('vesselUser')",
+    "const selected=servers[activeServerIndex];",
 ]
 found = [item for item in banned if item in main]
 if found:
@@ -40,6 +42,8 @@ required = [
     'callInviteTimer',
     'vessel-memberships-',
     'vessel-channels-',
+    'vessel-channel-messages-',
+    'vessel-friend-requests-out-',
     'data-remove-friend',
     'data-accept-request',
     'data-decline-request',
@@ -52,7 +56,13 @@ required = [
     'async function cleanupFailedAttachment(attachment)',
     '25*1024*1024',
     "document.querySelectorAll('.channel:not(.dm)')",
-    'activeDmId=null;',
+    "document.querySelector('#end-call')?.addEventListener('click',()=>endCall(true));",
+    'const openFriendsHome=()=>{friendsOpen=true;currentDm=null;activeDmId=null;',
+    "if(callConnection||callStream||incomingCall){vesselNotice('Заверши личный звонок",
+    'VOICE_REALTIME_TIMEOUT',
+    "activeChannelKind!=='text'",
+    'maxlength="32"',
+    'const selected=getActiveServer();',
 ]
 for item in required:
     if item not in main:
@@ -67,7 +77,7 @@ if "savedUser = JSON.parse(localStorage.getItem('vesselUser')" in main:
 channel_handler_start = main.find("document.querySelectorAll('.channel:not(.dm)')")
 if channel_handler_start < 0:
     raise SystemExit('Missing server-channel click handler')
-channel_handler = main[channel_handler_start:channel_handler_start + 1200]
+channel_handler = main[channel_handler_start:channel_handler_start + 1600]
 if 'activeDmId=null;' not in channel_handler or 'activeChannelId=channelId;' not in channel_handler:
     raise SystemExit('Channel handler does not isolate DM/channel state')
 if channel_handler.find('activeDmId=null;') > channel_handler.find('activeChannelId=channelId;'):
@@ -76,5 +86,18 @@ if channel_handler.find('activeDmId=null;') > channel_handler.find('activeChanne
 # Stable database ids, not array positions, must be the persisted server identity.
 if "let activeServerId = localStorage.getItem('vesselActiveServerId')" not in main:
     raise SystemExit('Active server must be persisted by stable database id')
+
+# The Friends home state must not keep a stale direct-message id alive.
+friends_start=main.find('const openFriendsHome=')
+if friends_start < 0 or 'activeDmId=null;' not in main[friends_start:friends_start+300]:
+    raise SystemExit('Friends home must clear active DM state')
+
+# Voice and direct calls share microphone resources and must be mutually exclusive.
+voice_start=main.find('async function toggleVoiceRoom(user)')
+voice_block=main[voice_start:voice_start+3500]
+if "callConnection||callStream||incomingCall" not in voice_block:
+    raise SystemExit('Voice room entry must refuse while a direct call is active or incoming')
+if "['CHANNEL_ERROR','TIMED_OUT','CLOSED']" not in voice_block:
+    raise SystemExit('Voice room must clean up failed Realtime subscriptions')
 
 print('Vessel authenticated runtime smoke check passed')
