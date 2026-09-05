@@ -13,7 +13,13 @@ let callPeer = null;
 let callPeerName = '';
 let callConnection = null;
 let callChannel = null;
+let callInboxChannel = null;
 let pendingIceCandidates = [];
+let localIceCandidates = [];
+let callOffer = null;
+let callVideo = false;
+let callAccepted = false;
+let incomingCall = null;
 let activeServerIndex = Number(localStorage.getItem('vesselActiveServer') || 0);
 let activeChannelName = 'общий';
 let activeChannelKind = 'text';
@@ -91,10 +97,83 @@ async function uploadVesselFile(file, user) {
 }
 
 function callRoomName(a,b) { return `vessel-call-${[a,b].sort().join('-')}`; }
+function callInboxName(userId) { return `vessel-call-inbox-${userId}`; }
+function serialiseDescription(description) { return description ? {type: description.type, sdp: description.sdp} : null; }
+function subscribeChannel(channel) {
+  if (channel.__subscribed) return Promise.resolve(channel);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) { settled = true; reject(new Error('Realtime channel timeout')); }
+    }, 10000);
+    channel.subscribe(status => {
+      if (settled) return;
+      if (status === 'SUBSCRIBED') {
+        settled = true;
+        clearTimeout(timer);
+        channel.__subscribed = true;
+        resolve(channel);
+      } else if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status)) {
+        settled = true;
+        clearTimeout(timer);
+        reject(new Error(`Realtime channel ${status}`));
+      }
+    });
+  });
+}
+async function sendCallInvite(user, peerId, payload) {
+  if (!supabase || !user?.id || !peerId) return;
+  const channel = supabase.channel(callInboxName(peerId));
+  try {
+    await subscribeChannel(channel);
+    await channel.send({type:'broadcast', event:'call', payload:{from:user.id,to:peerId,...payload}});
+  } catch (error) {
+    console.warn('Call invite failed', error);
+  } finally {
+    await supabase.removeChannel(channel);
+  }
+}
+async function ensureCallInbox(user) {
+  if (!supabase || !user?.id) return null;
+  const name = callInboxName(user.id);
+  if (callInboxChannel?.__roomName === name && callInboxChannel.__subscribed) return callInboxChannel;
+  if (callInboxChannel) await supabase.removeChannel(callInboxChannel);
+  callInboxChannel = supabase.channel(name);
+  callInboxChannel.__roomName = name;
+  callInboxChannel.on('broadcast', {event:'call'}, async ({payload}) => {
+    if (!payload || payload.to !== user.id) return;
+    if (payload.type === 'invite') {
+      if (callConnection || incomingCall) {
+        await sendCallInvite(user, payload.from, {type:'busy'});
+        return;
+      }
+      incomingCall = {from:payload.from, name:payload.name || 'Пользователь', video:!!payload.video, offer:payload.offer};
+      render();
+      return;
+    }
+    if (payload.from !== callPeer) return;
+    if (payload.type === 'accept') {
+      callAccepted = true;
+      await ensureCallChannel(user, callPeer);
+      if (callOffer) await sendCallSignal(user, callPeer, {type:'offer', description:callOffer}, callVideo);
+      await flushLocalIceCandidates(user, callPeer, callVideo);
+      render();
+      return;
+    }
+    if (payload.type === 'decline' || payload.type === 'busy') {
+      alert(payload.type === 'busy' ? 'Пользователь уже разговаривает.' : 'Вызов отклонён.');
+      await endCall(false);
+      return;
+    }
+    if (payload.type === 'bye') await endCall(false);
+  });
+  try { await subscribeChannel(callInboxChannel); } catch (error) { console.warn('Call inbox failed', error); }
+  return callInboxChannel;
+}
 async function ensureCallChannel(user, peerId) {
   if (!supabase || !user?.id || !peerId) return null;
   const name=callRoomName(user.id,peerId);
-  if(callChannel?.__roomName===name) return callChannel;
+  if(callChannel?.__roomName===name && callChannel.__subscribed) return callChannel;
   if(callChannel) await supabase.removeChannel(callChannel);
   callChannel=supabase.channel(name);
   callChannel.__roomName=name;
@@ -102,18 +181,29 @@ async function ensureCallChannel(user, peerId) {
     if(!payload || payload.to!==user.id) return;
     await handleCallSignal(user,payload.from,payload.signal,payload.video);
   });
-  await callChannel.subscribe();
+  await subscribeChannel(callChannel);
   return callChannel;
 }
 async function sendCallSignal(user,peerId,signal,video) {
   const room=await ensureCallChannel(user,peerId); if(!room)return;
   await room.send({type:'broadcast',event:'signal',payload:{from:user.id,to:peerId,signal,video:!!video}});
 }
+async function flushLocalIceCandidates(user, peerId, video) {
+  if (!callAccepted || !localIceCandidates.length) return;
+  const candidates = localIceCandidates.splice(0);
+  for (const candidate of candidates) await sendCallSignal(user, peerId, {type:'ice', candidate}, video);
+}
 function prepareCallConnection(user,peerId,video) {
+  if (callConnection) return callConnection;
   callConnection=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
-  callConnection.onicecandidate=e=>{if(e.candidate)sendCallSignal(user,peerId,{type:'ice',candidate:e.candidate},video);};
+  callConnection.onicecandidate=e=>{
+    if (!e.candidate) return;
+    if (callAccepted) sendCallSignal(user,peerId,{type:'ice',candidate:e.candidate},video);
+    else localIceCandidates.push(e.candidate);
+  };
   callConnection.ontrack=e=>{remoteCallStream=e.streams[0];const el=document.querySelector('#remote-video');if(el){el.srcObject=remoteCallStream;el.play().catch(()=>{});} };
-  callConnection.onconnectionstatechange=()=>{if(['failed','disconnected','closed'].includes(callConnection.connectionState)){endCall(false);}};
+  const connection = callConnection;
+  callConnection.onconnectionstatechange=()=>{if(connection===callConnection&&['failed','closed'].includes(connection.connectionState)){endCall(false);}};
   if(callStream) callStream.getTracks().forEach(track=>callConnection.addTrack(track,callStream));
   return callConnection;
 }
@@ -123,7 +213,7 @@ async function handleCallSignal(user,peerId,signal,video) {
   if(signal.type==='offer'){
     callPeer=peerId; callPeerName=callPeerName||'Пользователь';
     if(!callStream) callStream=await navigator.mediaDevices.getUserMedia({audio:true,video:!!video});
-    prepareCallConnection(user,peerId,!!video); await callConnection.setRemoteDescription(signal.description);
+    callVideo=!!video; prepareCallConnection(user,peerId,!!video); await callConnection.setRemoteDescription(signal.description);
     for(const candidate of pendingIceCandidates) await callConnection.addIceCandidate(candidate); pendingIceCandidates=[];
     const answer=await callConnection.createAnswer(); await callConnection.setLocalDescription(answer); await sendCallSignal(user,peerId,{type:'answer',description:answer},video); render(); return;
   }
@@ -132,12 +222,47 @@ async function handleCallSignal(user,peerId,signal,video) {
 async function startCall(video,user) {
   if(!activeDmId||!supabase||!user?.id){alert('Открой личный чат с настоящим другом, чтобы начать звонок.');return;}
   if(callConnection){endCall(true);return;}
-  try { callPeer=activeDmId; callPeerName=currentDm||'Пользователь'; callStream=await navigator.mediaDevices.getUserMedia({audio:true,video}); prepareCallConnection(user,activeDmId,video); const offer=await callConnection.createOffer(); await callConnection.setLocalDescription(offer); await sendCallSignal(user,activeDmId,{type:'offer',description:offer},video); render(); } catch { alert('Не удалось получить доступ к микрофону или камере.'); }
+  try {
+    callPeer=activeDmId; callPeerName=currentDm||'Пользователь'; callVideo=!!video; callAccepted=false; callOffer=null; localIceCandidates=[];
+    callStream=await navigator.mediaDevices.getUserMedia({audio:true,video:!!video});
+    prepareCallConnection(user,activeDmId,!!video);
+    const offer=await callConnection.createOffer();
+    await callConnection.setLocalDescription(offer);
+    callOffer=serialiseDescription(callConnection.localDescription);
+    await sendCallInvite(user,activeDmId,{type:'invite',name:callPeerName,video:callVideo,offer:callOffer});
+    render();
+  } catch { await endCall(false); alert('Не удалось получить доступ к микрофону или камере.'); }
+}
+async function acceptIncomingCall(user) {
+  if (!incomingCall || !user?.id) return;
+  const invite=incomingCall; incomingCall=null; callPeer=invite.from; callPeerName=invite.name; callVideo=invite.video; callAccepted=true;
+  activeDmId=invite.from; currentDm=invite.name; friendsOpen=false;
+  try {
+    callStream=await navigator.mediaDevices.getUserMedia({audio:true,video:callVideo});
+    await ensureCallChannel(user,callPeer);
+    await sendCallInvite(user,callPeer,{type:'accept',video:callVideo});
+    render();
+  } catch {
+    await sendCallInvite(user,callPeer,{type:'decline'});
+    await endCall(false);
+    alert('Не удалось получить доступ к микрофону или камере.');
+  }
+}
+async function rejectIncomingCall(user) {
+  if (!incomingCall) return;
+  const invite=incomingCall; incomingCall=null;
+  await sendCallInvite(user,invite.from,{type:'decline'});
+  render();
 }
 async function endCall(notify=true) {
   const user=JSON.parse(localStorage.getItem('vesselUser')||'null');
-  if(notify&&callPeer&&user?.id) await sendCallSignal(user,callPeer,{type:'bye'},!!document.querySelector('#remote-video')); 
-  callConnection?.close(); callConnection=null; callStream?.getTracks().forEach(track=>track.stop()); callStream=null; remoteCallStream=null; callPeer=null; pendingIceCandidates=[]; render();
+  const peer=callPeer;
+  if(notify&&peer&&user?.id) await sendCallInvite(user,peer,{type:'bye'});
+  const connection=callConnection; callConnection=null; connection?.close();
+  callStream?.getTracks().forEach(track=>track.stop()); callStream=null; remoteCallStream=null; callPeer=null; pendingIceCandidates=[];
+  localIceCandidates=[]; callOffer=null; callVideo=false; callAccepted=false;
+  if(callChannel&&supabase){await supabase.removeChannel(callChannel);callChannel=null;}
+  render();
 }
 
 let servers = JSON.parse(localStorage.getItem('vesselServers') || 'null') || [
@@ -217,7 +342,7 @@ function render() {
     return;
   }
   const user = JSON.parse(localStorage.getItem('vesselUser'));
-  connectRealtime(); connectSupabaseRealtime(user); syncSupabaseMessages(); syncSupabaseServers(user); syncSupabaseChannels(servers[activeServerIndex]); syncSocial(user); syncNotifications(user); if (activeDmId) { ensureCallChannel(user,activeDmId); } if (activeDmId && !window.__vesselDmLoaded) { window.__vesselDmLoaded=true; loadDirectMessages(user,activeDmId); }
+  connectRealtime(); connectSupabaseRealtime(user); ensureCallInbox(user).catch(()=>{}); syncSupabaseMessages(); syncSupabaseServers(user); syncSupabaseChannels(servers[activeServerIndex]); syncSocial(user); syncNotifications(user); if (activeDmId && callConnection) { ensureCallChannel(user,activeDmId).catch(()=>{}); } if (activeDmId && !window.__vesselDmLoaded) { window.__vesselDmLoaded=true; loadDirectMessages(user,activeDmId); }
   document.querySelector('#app').innerHTML = `
     <main class="shell">
       <aside class="servers"><button class="server home-tab ${friendsOpen?'selected':''}" id="friends-tab" title="Друзья">👥</button>${servers.map((s,i) => `<button class="server ${!friendsOpen&&i===activeServerIndex?'selected':''} ${s.add ? 'add' : ''}" data-server-index="${i}" title="${s.name}">${s.icon}</button>`).join('')}</aside>
@@ -239,7 +364,7 @@ function render() {
         <form class="composer ${friendsOpen?'hidden':''}"><button type="button" class="attach">＋</button><input placeholder="${currentDm?`Написать пользователю ${currentDm}`:`Написать в #${activeChannelName}`}" /><button type="button">☺</button><button type="submit" class="send">➤</button></form>
       </section>
       <aside class="members">${voiceStream?'<div class="voice-status">🎙 Ты в голосовой комнате</div>':''}<div class="members-title">УЧАСТНИКИ — 3</div><div class="member online"><div class="avatar" style="background:#8b7cff">М</div><span>Марк<small>Создатель</small></span><i></i></div><div class="member online"><div class="avatar" style="background:#ff7294">Л</div><span>Лиза<small>Дизайнер</small></span><i></i></div><div class="member online"><div class="avatar" style="background:#39d9a6">А</div><span>Артём<small>В сети</small></span><i></i></div></aside>
-    </main><div class="modal hidden" id="settings-modal"><div class="modal-card"><button class="modal-close" id="close-settings">×</button><h2>Настройки профиля</h2><p>Измени данные, которые видят другие участники Vessel.</p><form id="settings-form"><label>Имя пользователя<input name="name" value="${user.name}" required minlength="2" /></label><label>Статус<select name="status"><option>В сети</option><option>Не беспокоить</option><option>Отошёл</option></select></label><button class="primary" type="submit">Сохранить изменения</button></form><button class="danger" id="logout" type="button">Выйти из аккаунта</button></div></div>`;
+    </main><div class="modal hidden" id="settings-modal"><div class="modal-card"><button class="modal-close" id="close-settings">×</button><h2>Настройки профиля</h2><p>Измени данные, которые видят другие участники Vessel.</p><form id="settings-form"><label>Имя пользователя<input name="name" value="${user.name}" required minlength="2" /></label><label>Статус<select name="status"><option>В сети</option><option>Не беспокоить</option><option>Отошёл</option></select></label><button class="primary" type="submit">Сохранить изменения</button></form><button class="danger" id="logout" type="button">Выйти из аккаунта</button></div></div>${incomingCall?`<div class="modal call-modal" id="incoming-call-modal"><div class="modal-card"><div class="call-avatar">${incomingCall.name[0]?.toUpperCase()||'?'}</div><h2>${incomingCall.video?'Видеозвонок':'Аудиозвонок'}</h2><p>${incomingCall.name} звонит тебе в Vessel.</p><div class="call-actions"><button class="danger" id="reject-call" type="button">Отклонить</button><button class="primary" id="accept-call" type="button">Принять</button></div></div></div>`:''}`;
   document.querySelector('.composer').addEventListener('submit', async e => { e.preventDefault(); const input=e.currentTarget.querySelector('input'); if(input.value.trim()){ const text=input.value.trim(); if(activeDmId&&supabase&&user.id){ const {error}=await supabase.from('direct_messages').insert({sender_id:user.id,receiver_id:activeDmId,body:text}); if(error){alert('Не удалось отправить личное сообщение.');return;} dmMessages.push({name:user.name,time:'только что',color:'#39d9a6',text}); } else { messages.push({name:user.name,time:'только что',color:'#39d9a6',text}); localStorage.setItem('vesselMessages', JSON.stringify(messages)); if(supabase&&activeChannelId&&user.id) supabase.from('messages').insert({channel_id:activeChannelId,author_id:user.id,body:text}); fetch(`${API_URL}/api/messages`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:user.name,body:text,color:'#39d9a6'})}).catch(()=>{}); } input.value=''; render(); document.querySelector('.messages').scrollTop=99999; }});
   document.querySelector('.attach').addEventListener('click', () => {
     const picker = document.createElement('input'); picker.type = 'file'; picker.accept = 'image/*,.pdf,.doc,.docx,.zip';
@@ -258,6 +383,8 @@ function render() {
   document.querySelector('#close-settings').addEventListener('click', () => modal.classList.add('hidden'));
   document.querySelector('#settings-form').addEventListener('submit', e => { e.preventDefault(); const data=new FormData(e.currentTarget); localStorage.setItem('vesselUser', JSON.stringify({name:data.get('name'),email:user.email,status:data.get('status')})); location.reload(); });
   document.querySelector('#logout').addEventListener('click', () => { localStorage.removeItem('vesselUser'); location.reload(); });
+  document.querySelector('#accept-call')?.addEventListener('click', () => acceptIncomingCall(user));
+  document.querySelector('#reject-call')?.addEventListener('click', () => rejectIncomingCall(user));
   document.querySelectorAll('.channel').forEach(channel => channel.addEventListener('click', () => {
     document.querySelectorAll('.channel').forEach(item => item.classList.remove('active'));
     channel.classList.add('active');
