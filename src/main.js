@@ -555,13 +555,29 @@ async function bootstrapAuth() {
 
 async function joinByInvite(code, user) {
   if (!supabase || !user?.id) { alert('Для вступления нужен настоящий аккаунт.'); return false; }
-  const {data:invite,error}=await supabase.from('server_invites').select('id,server_id,role,max_uses,uses,expires_at').eq('code',code.trim().toUpperCase()).maybeSingle();
-  if(error || !invite){alert('Код приглашения не найден.');return false;}
-  if(invite.expires_at && new Date(invite.expires_at)<new Date()){alert('Срок действия приглашения истёк.');return false;}
-  if(invite.max_uses>0 && invite.uses>=invite.max_uses){alert('Приглашение больше недействительно.');return false;}
-  const {error:joinError}=await supabase.from('server_members').upsert({server_id:invite.server_id,user_id:user.id,role:invite.role});
-  if(joinError){alert('Не удалось вступить в сервер.');return false;}
-  window.__vesselServersLoaded=false; alert('Ты вступил в сервер.'); render(); return true;
+  const normalized=code?.trim().toUpperCase();
+  if(!normalized)return false;
+  const {data,error}=await supabase.functions.invoke('join-server',{body:{code:normalized}});
+  if(error){
+    let message='Не удалось вступить в сервер.';
+    try{
+      const payload=await error.context?.json?.();
+      if(payload?.error)message=payload.error;
+    }catch{}
+    alert(message);
+    return false;
+  }
+  if(!data?.ok){alert(data?.error||'Не удалось вступить в сервер.');return false;}
+  window.__vesselServersLoaded=false;
+  serverMembers=[];window.__vesselMembersServerId=null;
+  await syncSupabaseServers(user);
+  const index=servers.findIndex(item=>item.id===data.server_id);
+  if(index>=0)activeServerIndex=index;
+  localStorage.setItem('vesselActiveServer',activeServerIndex);
+  const server=servers[activeServerIndex];
+  if(server?.dbId){server.__channelsLoaded=false;await syncSupabaseChannels(server);await syncServerMembers(user,server);}
+  alert(data.already_member?'Ты уже состоишь в этом сервере.':'Ты вступил в сервер.');
+  return true;
 }
 
 function render() {
