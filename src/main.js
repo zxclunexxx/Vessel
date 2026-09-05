@@ -639,7 +639,7 @@ function connectSupabaseRealtime(user) {
     }).subscribe(),
     supabase.channel(`vessel-channels-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'channels'},payload=>{
       const row=payload.new?.server_id?payload.new:payload.old;
-      const active=servers[activeServerIndex];
+      const active=getActiveServer();
       if(row?.server_id&&active?.dbId===row.server_id){active.__channelsLoaded=false;syncSupabaseChannels(active);}
     }).subscribe(),
     supabase.channel(`vessel-channel-messages-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},payload=>{
@@ -909,17 +909,19 @@ function render() {
   });
   const addChannel = async kind => {
     const name=await vesselPrompt(kind==='voice'?'Новая голосовая комната':'Новый текстовый канал','','Название');
-    if(!name?.trim())return;
+    const channelName=String(name||'').trim().replace(/\s+/g,'-').replace(/-+/g,'-').slice(0,50);
+    if(!channelName)return;
     const server=getActiveServer();
     if(!supabase||!user.id||!server?.dbId){vesselNotice('Сначала выбери настоящий сервер.','error');return;}
     if(server.role!=='owner'){vesselNotice('Создавать каналы может только владелец сервера.','error');return;}
-    const position=serverChannels().length;
-    const {data,error}=await supabase.from('channels').insert({server_id:server.dbId,name:name.trim(),kind,position}).select('id,name,kind,position').single();
+    if(serverChannels().some(channel=>channel.name.toLocaleLowerCase('ru-RU')===channelName.toLocaleLowerCase('ru-RU'))){vesselNotice('Канал с таким названием уже существует.','error');return;}
+    const position=serverChannels().reduce((max,channel)=>Math.max(max,Number(channel.position)||0),-1)+1;
+    const {data,error}=await supabase.from('channels').insert({server_id:server.dbId,name:channelName,kind,position}).select('id,name,kind,position').single();
     if(error){vesselNotice(`Не удалось создать канал: ${error.message}`,'error');return;}
+    activeChannelId=data.id; activeChannelName=data.name; activeChannelKind=data.kind; currentDm=null; activeDmId=null; friendsOpen=false; messages=[];
     server.__channelsLoaded=false;
     await syncSupabaseChannels(server);
-    activeChannelId=data.id; activeChannelName=data.name; activeChannelKind=data.kind; currentDm=null; activeDmId=null;
-    if(kind==='text') await loadChannelMessages(data.id); else render();
+    vesselNotice(`${kind==='voice'?'Голосовой':'Текстовый'} канал «${data.name}» создан.`,'success');
   };
   document.querySelector('#channel-add').addEventListener('click', () => addChannel('text'));
   document.querySelector('#voice-add').addEventListener('click', () => addChannel('voice'));
@@ -931,19 +933,26 @@ function render() {
     const action=await vesselChoice(`Канал «${channel.name}»`,[{label:'Переименовать',value:'1'},{label:'Удалить',value:'2',danger:true}]);
     if(action==='1'){
       const name=await vesselPrompt('Переименовать канал',channel.name,'Название канала');
-      if(!name?.trim()||name.trim()===channel.name)return;
-      const {error}=await supabase.from('channels').update({name:name.trim()}).eq('id',channel.id).eq('server_id',server.dbId);
+      const channelName=String(name||'').trim().replace(/\s+/g,'-').replace(/-+/g,'-').slice(0,50);
+      if(!channelName||channelName===channel.name)return;
+      if(serverChannels().some(item=>item.id!==channel.id&&item.name.toLocaleLowerCase('ru-RU')===channelName.toLocaleLowerCase('ru-RU'))){vesselNotice('Канал с таким названием уже существует.','error');return;}
+      const {error}=await supabase.from('channels').update({name:channelName}).eq('id',channel.id).eq('server_id',server.dbId);
       if(error){vesselNotice(`Не удалось переименовать канал: ${error.message}`,'error');return;}
+      activeChannelId=channel.id;
       server.__channelsLoaded=false;
       await syncSupabaseChannels(server);
-      activeChannelId=channel.id; activeChannelName=name.trim(); render();
+      vesselNotice(`Канал переименован в «${channelName}».`,'success');
       return;
     }
     if(action==='2'){
       if(!await vesselConfirm(`Удалить канал «${channel.name}»?`))return;
+      if(voiceChannelId===channel.id&&voiceStream)await leaveVoiceRoom();
       const {error}=await supabase.from('channels').delete().eq('id',channel.id).eq('server_id',server.dbId);
       if(error){vesselNotice(`Не удалось удалить канал: ${error.message}`,'error');return;}
-      activeChannelId=null; messages=[]; server.__channelsLoaded=false; await syncSupabaseChannels(server);
+      if(activeChannelId===channel.id){activeChannelId=null;activeChannelName='нет каналов';activeChannelKind='text';messages=[];}
+      server.__channelsLoaded=false;
+      await syncSupabaseChannels(server);
+      vesselNotice(`Канал «${channel.name}» удалён.`,'success');
     }
   });
   document.querySelector('#dm-add').addEventListener('click', () => findAndRequestFriend(user));
