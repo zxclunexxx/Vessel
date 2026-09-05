@@ -36,6 +36,13 @@ npm run android:apk
 ветки `main`. Готовый тестовый файл находится в запуске workflow
 `Build Vessel Android APK` в разделе **Artifacts** под именем `Vessel-debug-apk`.
 
+## Веб-версия
+
+Веб-версия публикуется автоматически через workflow `Deploy Vessel Web`.
+После первого успешного запуска она доступна по адресу:
+
+`https://zxclunexxx.github.io/Vessel/`
+
 ## Структура
 
 - `src/` — интерфейс Vessel;
