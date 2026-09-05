@@ -68,6 +68,14 @@ async function loadDirectMessages(user, friendId) {
   dmMessages = (data || []).map(row => ({name:row.profiles?.username || 'Пользователь',time:new Date(row.created_at).toLocaleString('ru-RU'),color:row.profiles?.avatar_color || '#8b7cff',text:row.body}));
   render();
 }
+async function uploadVesselFile(file, user) {
+  if (!supabase || !user?.id) { alert('Для загрузки файлов нужен настоящий аккаунт.'); return null; }
+  const safeName=file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+  const path=`${user.id}/${crypto.randomUUID()}-${safeName}`;
+  const {error}=await supabase.storage.from('vessel-files').upload(path,file,{contentType:file.type||'application/octet-stream',upsert:false});
+  if(error){alert(`Файл не загрузился: ${error.message}`);return null;}
+  return {name:file.name,path,type:file.type||'application/octet-stream',size:file.size};
+}
 
 let servers = JSON.parse(localStorage.getItem('vesselServers') || 'null') || [
   { icon: 'V', name: 'Vessel', active: true },
@@ -171,7 +179,7 @@ function render() {
   document.querySelector('.composer').addEventListener('submit', async e => { e.preventDefault(); const input=e.currentTarget.querySelector('input'); if(input.value.trim()){ const text=input.value.trim(); if(activeDmId&&supabase&&user.id){ const {error}=await supabase.from('direct_messages').insert({sender_id:user.id,receiver_id:activeDmId,body:text}); if(error){alert('Не удалось отправить личное сообщение.');return;} dmMessages.push({name:user.name,time:'только что',color:'#39d9a6',text}); } else { messages.push({name:user.name,time:'только что',color:'#39d9a6',text}); localStorage.setItem('vesselMessages', JSON.stringify(messages)); if(supabase&&activeChannelId&&user.id) supabase.from('messages').insert({channel_id:activeChannelId,author_id:user.id,body:text}); fetch(`${API_URL}/api/messages`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:user.name,body:text,color:'#39d9a6'})}).catch(()=>{}); } input.value=''; render(); document.querySelector('.messages').scrollTop=99999; }});
   document.querySelector('.attach').addEventListener('click', () => {
     const picker = document.createElement('input'); picker.type = 'file'; picker.accept = 'image/*,.pdf,.doc,.docx,.zip';
-    picker.onchange = () => { const file = picker.files[0]; if (!file) return; messages.push({name:user.name,time:'только что',color:'#39d9a6',text:`📎 Прикреплён файл: ${file.name}`}); localStorage.setItem('vesselMessages', JSON.stringify(messages)); render(); };
+    picker.onchange = async () => { const file = picker.files[0]; if (!file) return; const attachment=await uploadVesselFile(file,user); if(!attachment)return; const body=`📎 ${file.name}`; if(activeChannelId&&user.id){const {error}=await supabase.from('messages').insert({channel_id:activeChannelId,author_id:user.id,body,attachments:[attachment]});if(error){alert('Файл загрузился, но сообщение не отправилось.');return;}} messages.push({name:user.name,time:'только что',color:'#39d9a6',text:body}); localStorage.setItem('vesselMessages', JSON.stringify(messages)); render(); };
     picker.click();
   });
   document.querySelector('#search-button').addEventListener('click', () => { const query=prompt('Поиск по сообщениям:'); if(query){ const found=messages.filter(m=>m.text.toLowerCase().includes(query.toLowerCase())); alert(found.length ? `Найдено сообщений: ${found.length}\n\n${found.map(m=>m.name+': '+m.text).join('\n')}` : 'Ничего не найдено'); }});
