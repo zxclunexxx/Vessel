@@ -1,34 +1,47 @@
 from pathlib import Path
-import re
 
 path = Path('src/main.js')
 text = path.read_text(encoding='utf-8')
 
-pattern = r"async function findAndRequestFriend\(user\) \{.*?\n\}"
-replacement = """async function findAndRequestFriend(user) {
-  const query=await vesselPrompt('Добавить друга','','Точное имя пользователя');
-  if(!query?.trim()) return;
-  if(!supabase||!user?.id){vesselNotice('Войди через настоящий аккаунт, чтобы добавлять друзей.','error');return;}
-  const {data:searchResult,error:searchError}=await supabase.functions.invoke('search-user',{body:{username:query.trim()}});
-  if(searchError){vesselNotice('Не удалось выполнить поиск пользователя.','error');return;}
-  const target=searchResult?.user;
-  if(!target){vesselNotice('Пользователь не найден.','error');return;}
-  if(target.self||target.id===user.id){vesselNotice('Нельзя добавить самого себя.','error');return;}
-  if(friends.some(friend=>friend.id===target.id)){vesselNotice(`${target.username} уже у тебя в друзьях.`);return;}
-  const {data:existing,error:existingError}=await supabase.from('friend_requests').select('id,status,sender_id,receiver_id').or(`and(sender_id.eq.${user.id},receiver_id.eq.${target.id}),and(sender_id.eq.${target.id},receiver_id.eq.${user.id})`).limit(1);
-  if(existingError){vesselNotice('Не удалось проверить заявки в друзья.','error');return;}
-  const request=existing?.[0];
-  if(request?.status==='pending'){
-    vesselNotice(request.receiver_id===user.id ? `${target.username} уже отправил тебе заявку. Открой раздел «Друзья».` : 'Заявка уже отправлена.');
-    return;
-  }
-  const {error:sendError}=await supabase.from('friend_requests').upsert({sender_id:user.id,receiver_id:target.id,status:'pending',updated_at:new Date().toISOString()},{onConflict:'sender_id,receiver_id'});
-  if(sendError){vesselNotice('Не удалось отправить заявку.','error');return;}
-  vesselNotice(`Заявка пользователю ${target.username} отправлена.`,'success');
-}"""
-text,count = re.subn(pattern,replacement,text,count=1,flags=re.S)
-if count != 1:
-    raise SystemExit(f'friend search replacement count={count}')
+# The callee must see the caller's name, not their own name from currentDm.
+old = "await sendCallInvite(user,activeDmId,{type:'invite',name:callPeerName,video:callVideo,offer:callOffer});"
+new = "await sendCallInvite(user,activeDmId,{type:'invite',name:user.name,video:callVideo,offer:callOffer});"
+if old not in text:
+    raise SystemExit('call invite name anchor not found')
+text = text.replace(old,new,1)
+
+# Allow a user to switch directly between voice rooms instead of first having to disconnect manually.
+old = """async function toggleVoiceRoom(user){
+  if(voiceStream){await leaveVoiceRoom();return;}
+  if(!supabase||!user?.id||!activeChannelId||activeChannelKind!=='voice'){alert('Сначала открой голосовой канал.');return;}"""
+new = """async function toggleVoiceRoom(user){
+  if(voiceStream && voiceChannelId===activeChannelId){await leaveVoiceRoom();return;}
+  if(!supabase||!user?.id||!activeChannelId||activeChannelKind!=='voice'){vesselNotice('Сначала открой голосовой канал.','error');return;}
+  if(voiceStream && voiceChannelId!==activeChannelId){await leaveVoiceRoom();}
+"""
+if old not in text:
+    raise SystemExit('toggleVoiceRoom anchor not found')
+text = text.replace(old,new,1)
+
+# Render the voice action according to the actual room connection, not merely whether any voice stream exists.
+old = """<button id=\"join-voice\" class=\"join-voice ${activeChannelKind==='voice'?'':'hidden'}\">${voiceStream?'Выйти':'Войти'}</button>"""
+new = """<button id=\"join-voice\" class=\"join-voice ${activeChannelKind==='voice'?'':'hidden'}\">${voiceStream?(voiceChannelId===activeChannelId?'Выйти':'Переключиться'):'Войти'}</button>"""
+if old not in text:
+    raise SystemExit('voice header button anchor not found')
+text = text.replace(old,new,1)
+
+old = "voiceButton.classList.remove('hidden');voiceButton.textContent=voiceStream?'Выйти':'Подключиться';voiceButton.onclick=()=>toggleVoiceRoom(user);"
+new = "voiceButton.classList.remove('hidden');voiceButton.textContent=voiceStream?(voiceChannelId===activeChannelId?'Выйти':'Переключиться'):'Подключиться';voiceButton.onclick=()=>toggleVoiceRoom(user);"
+if old not in text:
+    raise SystemExit('voice channel button text anchor not found')
+text = text.replace(old,new,1)
+
+# Do not expose the voice mute button while viewing a different room than the connected one.
+old = "if(voiceStream){muteButton.classList.remove('hidden');muteButton.onclick=toggleVoiceMicrophone;}else muteButton.classList.add('hidden');"
+new = "if(voiceStream&&voiceChannelId===activeChannelId){muteButton.classList.remove('hidden');muteButton.onclick=toggleVoiceMicrophone;}else muteButton.classList.add('hidden');"
+if old not in text:
+    raise SystemExit('voice mute visibility anchor not found')
+text = text.replace(old,new,1)
 
 path.write_text(text,encoding='utf-8')
-print('Applied private friend directory search patch')
+print('Applied call identity and voice switching patch')
