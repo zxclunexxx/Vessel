@@ -40,6 +40,37 @@ const savedChannelMap = JSON.parse(localStorage.getItem('vesselChannelMap') || '
 function escapeHtml(value='') {
   return String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 }
+function vesselDialog({title,message='',input=false,value='',placeholder='',choices=[]}) {
+  return new Promise(resolve=>{
+    const overlay=document.createElement('div');
+    overlay.className='modal vessel-dialog';
+    const choiceMarkup=choices.map(choice=>`<button type="button" class="dialog-choice ${choice.danger?'dialog-danger':''}" data-dialog-value="${escapeHtml(choice.value)}">${escapeHtml(choice.label)}</button>`).join('');
+    overlay.innerHTML=`<div class="modal-card dialog-card"><button class="modal-close" data-dialog-cancel>×</button><h2>${escapeHtml(title)}</h2>${message?`<p>${escapeHtml(message)}</p>`:''}${input?`<input class="dialog-input" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}" />`:''}<div class="dialog-actions">${choiceMarkup}${input?'<button type="button" class="primary" data-dialog-submit>Готово</button>':''}</div></div>`;
+    document.body.appendChild(overlay);
+    const finish=result=>{overlay.remove();resolve(result);};
+    overlay.querySelector('[data-dialog-cancel]').addEventListener('click',()=>finish(null));
+    overlay.addEventListener('click',event=>{if(event.target===overlay)finish(null);});
+    overlay.querySelectorAll('[data-dialog-value]').forEach(button=>button.addEventListener('click',()=>finish(button.dataset.dialogValue)));
+    if(input){
+      const field=overlay.querySelector('.dialog-input');
+      const submit=()=>finish(field.value);
+      overlay.querySelector('[data-dialog-submit]').addEventListener('click',submit);
+      field.addEventListener('keydown',event=>{if(event.key==='Enter')submit();if(event.key==='Escape')finish(null);});
+      setTimeout(()=>{field.focus();field.select();},0);
+    }
+  });
+}
+function vesselPrompt(title,value='',placeholder='') { return vesselDialog({title,input:true,value,placeholder}); }
+function vesselChoice(title,choices,message='') { return vesselDialog({title,message,choices}); }
+async function vesselConfirm(title,message='') { return (await vesselChoice(title,[{label:'Отмена',value:'no'},{label:'Подтвердить',value:'yes',danger:true}],message))==='yes'; }
+function vesselNotice(message,type='info') {
+  const toast=document.createElement('div');
+  toast.className=`vessel-toast ${type}`;
+  toast.textContent=message;
+  document.body.appendChild(toast);
+  requestAnimationFrame(()=>toast.classList.add('show'));
+  setTimeout(()=>{toast.classList.remove('show');setTimeout(()=>toast.remove(),180);},3200);
+}
 function attachmentMarkup(attachments=[]) {
   return (attachments||[]).map(file=>`<button class="attachment-link" data-attachment-path="${escapeHtml(file.path||'')}">📎 ${escapeHtml(file.name||'Файл')}</button>`).join('');
 }
@@ -110,7 +141,7 @@ async function syncServerMembers(user, server) {
 }
 
 async function findAndRequestFriend(user) {
-  const query=prompt('Введи точное имя пользователя:');
+  const query=await vesselPrompt('Добавить друга','','Точное имя пользователя');
   if(!query?.trim()) return;
   if(!supabase||!user?.id){alert('Войди через настоящий аккаунт, чтобы добавлять друзей.');return;}
   const {data:found,error}=await supabase.from('profiles').select('id,username,avatar_color,status').ilike('username',query.trim()).limit(1);
@@ -125,7 +156,7 @@ async function findAndRequestFriend(user) {
     return;
   }
   const {error:sendError}=await supabase.from('friend_requests').upsert({sender_id:user.id,receiver_id:target.id,status:'pending',updated_at:new Date().toISOString()},{onConflict:'sender_id,receiver_id'});
-  alert(sendError?'Не удалось отправить заявку.':`Заявка пользователю ${target.username} отправлена.`);
+  sendError?alert('Не удалось отправить заявку.'):vesselNotice(`Заявка пользователю ${target.username} отправлена.`,'success');
 }
 
 async function syncSocial(user) {
@@ -588,7 +619,7 @@ async function joinByInvite(code, user) {
   localStorage.setItem('vesselActiveServer',activeServerIndex);
   const server=servers[activeServerIndex];
   if(server?.dbId){server.__channelsLoaded=false;await syncSupabaseChannels(server);await syncServerMembers(user,server);}
-  alert(data.already_member?'Ты уже состоишь в этом сервере.':'Ты вступил в сервер.');
+  vesselNotice(data.already_member?'Ты уже состоишь в этом сервере.':'Ты вступил в сервер.','success');
   return true;
 }
 
@@ -714,7 +745,7 @@ function render() {
     const server=servers[activeServerIndex];
     if(!server?.dbId){alert('Сначала выбери сервер.');return;}
     if(server.role==='owner'){
-      const action=prompt('Управление сервером:\n1 — создать приглашение\n2 — переименовать сервер\n3 — удалить сервер');
+      const action=await vesselChoice('Управление сервером',[{label:'Создать приглашение',value:'1'},{label:'Переименовать сервер',value:'2'},{label:'Удалить сервер',value:'3',danger:true}]);
       if(action==='1'){
         const code=`VSL-${crypto.randomUUID().slice(0,8).toUpperCase()}`;
         const {error}=await supabase.from('server_invites').insert({server_id:server.dbId,created_by:user.id,code});
@@ -722,14 +753,14 @@ function render() {
         return;
       }
       if(action==='2'){
-        const name=prompt('Новое название сервера:',server.name);
+        const name=await vesselPrompt('Переименовать сервер',server.name,'Название сервера');
         if(!name?.trim()||name.trim()===server.name)return;
         const {error}=await supabase.from('servers').update({name:name.trim()}).eq('id',server.dbId).eq('owner_id',user.id);
         if(error){alert(`Не удалось переименовать сервер: ${error.message}`);return;}
         server.name=name.trim(); render(); return;
       }
       if(action==='3'){
-        if(!confirm(`Удалить сервер «${server.name}» вместе с каналами и сообщениями?`))return;
+        if(!await vesselConfirm(`Удалить сервер «${server.name}»?`,'Каналы и сообщения этого сервера тоже будут удалены.'))return;
         const {error}=await supabase.from('servers').delete().eq('id',server.dbId).eq('owner_id',user.id);
         if(error){alert(`Не удалось удалить сервер: ${error.message}`);return;}
         window.__vesselServersLoaded=false; activeServerIndex=0; activeChannelId=null; currentDm=null; activeDmId=null; messages=[]; serverMembers=[]; window.__vesselMembersServerId=null;
@@ -740,7 +771,7 @@ function render() {
       }
       return;
     }
-    if(confirm(`Выйти из сервера «${server.name}»?`)){
+    if(await vesselConfirm(`Выйти из сервера «${server.name}»?`)){
       const {error}=await supabase.from('server_members').delete().eq('server_id',server.dbId).eq('user_id',user.id);
       if(error){alert(`Не удалось выйти из сервера: ${error.message}`);return;}
       window.__vesselServersLoaded=false; activeServerIndex=0; activeChannelId=null; currentDm=null; activeDmId=null; messages=[]; serverMembers=[]; window.__vesselMembersServerId=null;
@@ -750,7 +781,7 @@ function render() {
     }
   });
   const addChannel = async kind => {
-    const name=prompt(kind==='voice'?'Название голосовой комнаты:':'Название нового канала:');
+    const name=await vesselPrompt(kind==='voice'?'Новая голосовая комната':'Новый текстовый канал','','Название');
     if(!name?.trim())return;
     const server=servers[activeServerIndex];
     if(!supabase||!user.id||!server?.dbId){alert('Сначала выбери настоящий сервер.');return;}
@@ -770,9 +801,9 @@ function render() {
     if(!server?.dbId||server.role!=='owner'||!activeChannelId)return;
     const channel=serverChannels().find(item=>item.id===activeChannelId);
     if(!channel)return;
-    const action=prompt(`Канал «${channel.name}»:\n1 — переименовать\n2 — удалить`);
+    const action=await vesselChoice(`Канал «${channel.name}»`,[{label:'Переименовать',value:'1'},{label:'Удалить',value:'2',danger:true}]);
     if(action==='1'){
-      const name=prompt('Новое название канала:',channel.name);
+      const name=await vesselPrompt('Переименовать канал',channel.name,'Название канала');
       if(!name?.trim()||name.trim()===channel.name)return;
       const {error}=await supabase.from('channels').update({name:name.trim()}).eq('id',channel.id).eq('server_id',server.dbId);
       if(error){alert(`Не удалось переименовать канал: ${error.message}`);return;}
@@ -782,7 +813,7 @@ function render() {
       return;
     }
     if(action==='2'){
-      if(!confirm(`Удалить канал «${channel.name}»?`))return;
+      if(!await vesselConfirm(`Удалить канал «${channel.name}»?`))return;
       const {error}=await supabase.from('channels').delete().eq('id',channel.id).eq('server_id',server.dbId);
       if(error){alert(`Не удалось удалить канал: ${error.message}`);return;}
       activeChannelId=null; messages=[]; server.__channelsLoaded=false; await syncSupabaseChannels(server);
@@ -830,7 +861,7 @@ function render() {
       window.__vesselMembersServerId=null;serverMembers=[];await syncServerMembers(user,server);render();return;
     }
     if(action==='3'){
-      if(!confirm(`Исключить ${member.username} из сервера?`))return;
+      if(!await vesselConfirm(`Исключить ${member.username} из сервера?`))return;
       const {error}=await supabase.from('server_members').delete().eq('server_id',server.dbId).eq('user_id',memberId);
       if(error){alert(`Не удалось исключить участника: ${error.message}`);return;}
       window.__vesselMembersServerId=null;serverMembers=[];await syncServerMembers(user,server);render();
@@ -842,7 +873,7 @@ function render() {
     if(!supabase||!user.id)return;
     const friendId=button.dataset.removeFriend;
     const friend=friends.find(item=>item.id===friendId);
-    if(!confirm(`Удалить ${friend?.username||'пользователя'} из друзей?`))return;
+    if(!await vesselConfirm(`Удалить ${friend?.username||'пользователя'} из друзей?`))return;
     const {error}=await supabase.from('friendships').delete().or(`and(user_id.eq.${user.id},friend_id.eq.${friendId}),and(user_id.eq.${friendId},friend_id.eq.${user.id})`);
     if(error){alert(`Не удалось удалить друга: ${error.message}`);return;}
     if(activeDmId===friendId){activeDmId=null;currentDm=null;dmMessages=[];window.__vesselDmLoaded=false;}
@@ -859,8 +890,14 @@ function render() {
   document.querySelectorAll('[data-call-id]').forEach(button=>button.addEventListener('click',()=>{currentDm=button.dataset.call;activeDmId=button.dataset.callId;friendsOpen=false;window.__vesselDmLoaded=false;render();startCall(false,user);}));
   document.querySelectorAll('.server[data-server-index]').forEach(server => server.addEventListener('click', async () => {
     if (server.classList.contains('add')) {
-      if(supabase&&user.id&&confirm('У тебя есть код приглашения? Нажми «ОК», чтобы вступить в сервер.')){const code=prompt('Введи код приглашения:');if(code?.trim()){await joinByInvite(code,user);return;}}
-      const name=prompt('Название нового сервера:');
+      const addMode=await vesselChoice('Добавить сервер',[{label:'Вступить по приглашению',value:'join'},{label:'Создать свой сервер',value:'create'}]);
+      if(addMode==='join'){
+        const code=await vesselPrompt('Вступить в сервер','','Код VSL-…');
+        if(code?.trim())await joinByInvite(code,user);
+        return;
+      }
+      if(addMode!=='create')return;
+      const name=await vesselPrompt('Создать сервер','','Название сервера');
       if(name&&name.trim()){
         if(!supabase||!user.id){alert('Нужна активная сессия Vessel.');return;}
         const icon=name.trim()[0].toUpperCase();
