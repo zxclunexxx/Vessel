@@ -1,89 +1,45 @@
 from pathlib import Path
 
-path = Path('src/main.js')
-text = path.read_text(encoding='utf-8')
+main_path = Path('src/main.js')
+css_path = Path('src/style.css')
+text = main_path.read_text(encoding='utf-8')
+css = css_path.read_text(encoding='utf-8')
 
-# Escape user-controlled content before inserting it into the large innerHTML template.
-anchor = "const savedChannelMap = JSON.parse(localStorage.getItem('vesselChannelMap') || '{}');"
-helper = """const savedChannelMap = JSON.parse(localStorage.getItem('vesselChannelMap') || '{}');
-function escapeHtml(value='') {
-  return String(value).replace(/[&<>\"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[char]));
-}
-function attachmentMarkup(attachments=[]) {
-  return (attachments||[]).map(file=>`<button class=\"attachment-link\" data-attachment-path=\"${escapeHtml(file.path||'')}\">📎 ${escapeHtml(file.name||'Файл')}</button>`).join('');
-}
-async function openAttachment(path) {
-  if(!supabase||!path)return;
-  const {data,error}=await supabase.storage.from('vessel-files').createSignedUrl(path,60);
-  if(error||!data?.signedUrl){alert('Не удалось открыть файл.');return;}
-  window.open(data.signedUrl,'_blank','noopener,noreferrer');
-}"""
+old = """serverMembers.map(member=>`<div class=\"member online\"><div class=\"avatar\" style=\"background:${member.avatar_color}\">${member.username[0]?.toUpperCase()||'?'}</div><span>${member.username}<small>${member.role==='owner'?'Создатель':member.status}</small></span><i></i></div>`).join('')"""
+new = """serverMembers.map(member=>`<div class=\"member online\"><div class=\"avatar\" style=\"background:${escapeHtml(member.avatar_color||'#8b7cff')}\">${escapeHtml(member.username[0]?.toUpperCase()||'?')}</div><span>${escapeHtml(member.username)}<small>${member.role==='owner'?'Создатель':member.role==='moderator'?'Модератор':escapeHtml(member.status)}</small></span>${activeServer?.role==='owner'&&member.role!=='owner'?`<button class=\"member-manage\" data-manage-member=\"${member.id}\" title=\"Управление участником\">•••</button>`:'<i></i>'}</div>`).join('')"""
+if old not in text:
+    raise SystemExit('member list template not found')
+text = text.replace(old, new, 1)
+
+anchor = """  document.querySelector('#head-settings').addEventListener('click',()=>modal.classList.remove('hidden'));"""
+addition = """  document.querySelector('#head-settings').addEventListener('click',()=>modal.classList.remove('hidden'));
+  document.querySelectorAll('[data-manage-member]').forEach(button=>button.addEventListener('click',async()=>{
+    const server=servers[activeServerIndex];
+    if(!supabase||!user.id||server?.role!=='owner')return;
+    const memberId=button.dataset.manageMember;
+    const member=serverMembers.find(item=>item.id===memberId);
+    if(!member)return;
+    const action=prompt(`Участник ${member.username}:\n1 — сделать участником\n2 — сделать модератором\n3 — исключить из сервера`);
+    if(action==='1'||action==='2'){
+      const role=action==='2'?'moderator':'member';
+      const {error}=await supabase.from('server_members').update({role}).eq('server_id',server.dbId).eq('user_id',memberId);
+      if(error){alert(`Не удалось изменить роль: ${error.message}`);return;}
+      window.__vesselMembersServerId=null;serverMembers=[];await syncServerMembers(user,server);render();return;
+    }
+    if(action==='3'){
+      if(!confirm(`Исключить ${member.username} из сервера?`))return;
+      const {error}=await supabase.from('server_members').delete().eq('server_id',server.dbId).eq('user_id',memberId);
+      if(error){alert(`Не удалось исключить участника: ${error.message}`);return;}
+      window.__vesselMembersServerId=null;serverMembers=[];await syncServerMembers(user,server);render();
+    }
+  }));"""
 if anchor not in text:
-    raise SystemExit('savedChannelMap anchor not found')
-text = text.replace(anchor, helper, 1)
-
-# Preserve attachment metadata when loading channel and DM history.
-old = "select('body,created_at,profiles(username,avatar_color)')"
-new = "select('body,attachments,created_at,profiles(username,avatar_color)')"
-if old not in text:
-    raise SystemExit('channel message select not found')
-text = text.replace(old, new, 1)
-
-old = "messages = data?.length ? data.map(m=>({name:m.profiles?.username||'Участник',time:new Date(m.created_at).toLocaleString('ru-RU'),color:m.profiles?.avatar_color||'#8b7cff',text:m.body})) : [];"
-new = "messages = data?.length ? data.map(m=>({name:m.profiles?.username||'Участник',time:new Date(m.created_at).toLocaleString('ru-RU'),color:m.profiles?.avatar_color||'#8b7cff',text:m.body,attachments:m.attachments||[]})) : [];"
-if old not in text:
-    raise SystemExit('channel message mapping not found')
-text = text.replace(old, new, 1)
-
-old = "dmMessages = (data || []).map(row => ({name:row.profiles?.username || 'Пользователь',time:new Date(row.created_at).toLocaleString('ru-RU'),color:row.profiles?.avatar_color || '#8b7cff',text:row.body}));"
-new = "dmMessages = (data || []).map(row => ({name:row.profiles?.username || 'Пользователь',time:new Date(row.created_at).toLocaleString('ru-RU'),color:row.profiles?.avatar_color || '#8b7cff',text:row.body,attachments:row.attachments||[]}));"
-if old not in text:
-    raise SystemExit('DM message mapping not found')
-text = text.replace(old, new, 1)
-
-# Escape rendered message text and expose attachments with short-lived signed URLs.
-old = "<article class=\"message\"><div class=\"avatar\" style=\"background:${m.color}\">${m.name[0]}</div><div><div class=\"message-meta\"><b>${m.name}</b><time>${m.time}</time></div><p>${m.text}</p></div></article>"
-new = "<article class=\"message\"><div class=\"avatar\" style=\"background:${escapeHtml(m.color||'#8b7cff')}\">${escapeHtml(m.name?.[0]||'?')}</div><div><div class=\"message-meta\"><b>${escapeHtml(m.name)}</b><time>${escapeHtml(m.time)}</time></div><p>${escapeHtml(m.text)}</p>${attachmentMarkup(m.attachments)}</div></article>"
-if old not in text:
-    raise SystemExit('message article template not found')
-text = text.replace(old, new, 1)
-
-# Store attachment metadata in optimistic local entries too.
-text = text.replace("dmMessages.push({name:user.name,time:'только что',color:user.avatarColor||'#39d9a6',text:body});", "dmMessages.push({name:user.name,time:'только что',color:user.avatarColor||'#39d9a6',text:body,attachments:[attachment]});", 1)
-text = text.replace("messages.push({name:user.name,time:'только что',color:user.avatarColor||'#39d9a6',text:body});", "messages.push({name:user.name,time:'только что',color:user.avatarColor||'#39d9a6',text:body,attachments:[attachment]});", 1)
-
-# Add an explicit remove-friend control.
-old = "<button data-call-id=\"${friend.id}\" data-call=\"${friend.username}\">📞</button>"
-new = "<button data-call-id=\"${friend.id}\" data-call=\"${escapeHtml(friend.username)}\">📞</button><button class=\"danger compact\" data-remove-friend=\"${friend.id}\" title=\"Удалить из друзей\">×</button>"
-if old not in text:
-    raise SystemExit('friend call button not found')
-text = text.replace(old, new, 1)
-
-# Escape the most exposed user-controlled names in friend/DM lists and channel labels.
-text = text.replace('data-dm=\"${friend.username}\"', 'data-dm=\"${escapeHtml(friend.username)}\"')
-text = text.replace(' ${friend.username} <em>', ' ${escapeHtml(friend.username)} <em>')
-text = text.replace('<b>${friend.username}</b>', '<b>${escapeHtml(friend.username)}</b>')
-text = text.replace('<b>${request.profiles?.username||\'Пользователь\'}</b>', '<b>${escapeHtml(request.profiles?.username||\'Пользователь\')}</b>')
-text = text.replace('data-channel-name=\"${c.name}\"', 'data-channel-name=\"${escapeHtml(c.name)}\"')
-text = text.replace(' ${c.name}</button>', ' ${escapeHtml(c.name)}</button>')
-
-# Wire attachment opening and reciprocal friendship removal.
-anchor = "document.querySelectorAll('[data-accept-request]').forEach"
-addition = """document.querySelectorAll('[data-attachment-path]').forEach(button=>button.addEventListener('click',()=>openAttachment(button.dataset.attachmentPath)));
-  document.querySelectorAll('[data-remove-friend]').forEach(button=>button.addEventListener('click',async()=>{
-    if(!supabase||!user.id)return;
-    const friendId=button.dataset.removeFriend;
-    const friend=friends.find(item=>item.id===friendId);
-    if(!confirm(`Удалить ${friend?.username||'пользователя'} из друзей?`))return;
-    const {error}=await supabase.from('friendships').delete().or(`and(user_id.eq.${user.id},friend_id.eq.${friendId}),and(user_id.eq.${friendId},friend_id.eq.${user.id})`);
-    if(error){alert(`Не удалось удалить друга: ${error.message}`);return;}
-    if(activeDmId===friendId){activeDmId=null;currentDm=null;dmMessages=[];window.__vesselDmLoaded=false;}
-    window.__vesselSocialLoaded=false;await syncSocial(user);render();
-  }));
-  document.querySelectorAll('[data-accept-request]').forEach"""
-if anchor not in text:
-    raise SystemExit('accept request listener anchor not found')
+    raise SystemExit('head settings anchor not found')
 text = text.replace(anchor, addition, 1)
 
-path.write_text(text, encoding='utf-8')
-print('Applied social, attachment and content-safety patch')
+# Improve layout for attachment buttons, friend removal and member moderation.
+css += "\n.attachment-link{display:inline-flex;align-items:center;gap:7px;margin-top:7px;margin-right:7px;border:1px solid #3b4257;background:#222735;color:#cfd4e6;border-radius:9px;padding:8px 10px;font:500 12px Inter;cursor:pointer}.attachment-link:hover{background:#2c3243;border-color:#5b6380}.member-manage{margin-left:auto;border:0;background:#252a38;color:#9ca4ba;border-radius:8px;min-width:30px;height:30px;cursor:pointer}.member-manage:hover{background:#32394c;color:#fff}.friend-row{grid-template-columns:44px minmax(120px,1fr) auto 42px 42px 42px}@media(max-width:600px){.friend-row{grid-template-columns:40px minmax(0,1fr) 36px 36px 36px}}\n"
+
+main_path.write_text(text, encoding='utf-8')
+css_path.write_text(css, encoding='utf-8')
+print('Applied member role management and attachment UI patch')
