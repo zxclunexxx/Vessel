@@ -9,6 +9,7 @@ on:
       - 'scripts/lifecycle_patch.py'
       - 'scripts/attachment_context_patch.py'
       - 'scripts/call_security_patch.py'
+      - 'scripts/profile_privacy_patch.py'
 
 permissions:
   contents: write
@@ -33,6 +34,7 @@ jobs:
           if [ -f scripts/lifecycle_patch.py ]; then python scripts/lifecycle_patch.py; fi
           if [ -f scripts/attachment_context_patch.py ]; then python scripts/attachment_context_patch.py; fi
           if [ -f scripts/call_security_patch.py ]; then python scripts/call_security_patch.py; fi
+          if [ -f scripts/profile_privacy_patch.py ]; then python scripts/profile_privacy_patch.py; fi
       - name: Check JavaScript syntax
         run: node --check src/main.js
       - name: Install dependencies
