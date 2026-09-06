@@ -129,6 +129,7 @@ async function loadChannelMessages(channelId) {
   if(!sessionUserId)return;
   const {data,error} = await supabase.from('messages').select('body,attachments,created_at,profiles(username,avatar_color)').eq('channel_id',channelId).order('created_at',{ascending:false}).limit(100);
   if(savedUser?.id!==sessionUserId||activeDmId||activeChannelId!==channelId||activeChannelKind!=='text')return;
+  if(activeDmId||activeChannelId!==channelId||activeChannelKind!=='text')return;
   if(error){vesselNotice('Не удалось загрузить сообщения канала.','error');return;}
   messages = (data||[]).reverse().map(m=>({name:m.profiles?.username||'Участник',time:new Date(m.created_at).toLocaleString('ru-RU'),color:m.profiles?.avatar_color||'#8b7cff',text:m.body,attachments:m.attachments||[]}));
   render();
@@ -283,8 +284,10 @@ async function syncNotifications(user) {
 }
 async function loadDirectMessages(user, friendId) {
   if (!supabase || !user?.id || !friendId) return;
-  const {data,error} = await supabase.from('direct_messages').select('id,sender_id,receiver_id,body,attachments,created_at,profiles!direct_messages_sender_id_fkey(username,avatar_color)').or(`and(sender_id.eq.${user.id},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${user.id})`).order('created_at',{ascending:false}).limit(100);
-  if(activeDmId!==friendId)return;
+  const dmLoadUserId=user.id;
+  if(savedUser?.id!==dmLoadUserId)return;
+  const {data,error} = await supabase.from('direct_messages').select('id,sender_id,receiver_id,body,attachments,created_at,profiles!direct_messages_sender_id_fkey(username,avatar_color)').or(`and(sender_id.eq.${dmLoadUserId},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${dmLoadUserId})`).order('created_at',{ascending:false}).limit(100);
+  if(savedUser?.id!==dmLoadUserId||activeDmId!==friendId)return;
   if(error){vesselNotice('Не удалось загрузить личные сообщения.','error');return;}
   dmMessages = (data || []).reverse().map(row => ({name:row.profiles?.username || 'Пользователь',time:new Date(row.created_at).toLocaleString('ru-RU'),color:row.profiles?.avatar_color || '#8b7cff',text:row.body,attachments:row.attachments||[]}));
   render();
@@ -1142,9 +1145,12 @@ async function joinByInvite(code, user) {
 }
 
 async function refreshReadOnlyDirectMessage(user,peerId){
+  const refreshUserId=user?.id||null;
+  if(!refreshUserId||savedUser?.id!==refreshUserId)return;
   window.__vesselSocialLoaded=false;
   window.__vesselDmThreadsLoaded=false;
   await Promise.all([syncSocial(user),syncDmThreads(user)]);
+  if(savedUser?.id!==refreshUserId)return;
   if(activeDmId===peerId){
     window.__vesselDmLoaded=false;
     await loadDirectMessages(user,peerId);
@@ -1152,7 +1158,10 @@ async function refreshReadOnlyDirectMessage(user,peerId){
 }
 async function verifyDirectMessageAccess(user,peerId,{notify=true}={}){
   if(!supabase||!user?.id||!peerId)return false;
-  const {data,error}=await supabase.from('friendships').select('friend_id').eq('user_id',user.id).eq('friend_id',peerId).maybeSingle();
+  const accessUserId=user.id;
+  if(savedUser?.id!==accessUserId)return null;
+  const {data,error}=await supabase.from('friendships').select('friend_id').eq('user_id',accessUserId).eq('friend_id',peerId).maybeSingle();
+  if(savedUser?.id!==accessUserId)return null;
   if(error){
     console.warn('DM friendship verification failed',error);
     if(notify)vesselNotice('Не удалось проверить доступ к переписке. Попробуй ещё раз.','error');
@@ -1160,6 +1169,7 @@ async function verifyDirectMessageAccess(user,peerId,{notify=true}={}){
   }
   if(data)return true;
   await refreshReadOnlyDirectMessage(user,peerId);
+  if(savedUser?.id!==accessUserId)return null;
   if(notify)vesselNotice('Пользователь больше не в друзьях. История оставлена только для чтения.','error');
   return false;
 }
@@ -1263,10 +1273,12 @@ function render() {
     const text=input.value.trim();
     if(!text)return;
     if(!supabase||!user.id){vesselNotice('Нужна активная сессия Vessel.','error');return;}
+    const sendSessionUserId=user.id;
     if(activeDmId){
       const peerId=activeDmId;
       if((await verifyDirectMessageAccess(user,peerId))!==true)return;
-      const {error}=await supabase.from('direct_messages').insert({sender_id:user.id,receiver_id:peerId,body:text});
+      const {error}=await supabase.from('direct_messages').insert({sender_id:sendSessionUserId,receiver_id:peerId,body:text});
+      if(savedUser?.id!==sendSessionUserId)return;
       if(error){
         const access=await verifyDirectMessageAccess(user,peerId,{notify:false});
         if(access===false){vesselNotice('Пользователь больше не в друзьях. История оставлена только для чтения.','error');return;}
@@ -1280,10 +1292,12 @@ function render() {
     } else {
       if(!activeChannelId||activeChannelKind!=='text'){vesselNotice('Сначала выбери текстовый канал.','error');return;}
       const channelId=activeChannelId;
-      const {error}=await supabase.from('messages').insert({channel_id:channelId,author_id:user.id,body:text});
+      const {error}=await supabase.from('messages').insert({channel_id:channelId,author_id:sendSessionUserId,body:text});
+      if(savedUser?.id!==sendSessionUserId)return;
       if(error){vesselNotice(`Не удалось отправить сообщение: ${error.message}`,'error');return;}
       if(!activeDmId&&activeChannelId===channelId&&activeChannelKind==='text')messages.push({name:user.name,time:'только что',color:user.avatarColor||'#39d9a6',text});
     }
+    if(savedUser?.id!==sendSessionUserId)return;
     input.value='';
     render();
     const list=document.querySelector('.messages');
@@ -1304,16 +1318,22 @@ function render() {
     const picker=document.createElement('input'); picker.type='file'; picker.accept='image/*,.pdf,.doc,.docx,.zip';
     picker.onchange=async()=>{
       const file=picker.files[0]; if(!file)return;
+      const attachmentSessionUserId=user.id;
+      if(savedUser?.id!==attachmentSessionUserId)return;
       const targetDmId=activeDmId;
       const targetChannelId=!targetDmId&&activeChannelKind==='text'?activeChannelId:null;
       if(!targetDmId&&!targetChannelId){vesselNotice('Открой текстовый канал или личный чат.','error');return;}
       if(targetDmId&&(await verifyDirectMessageAccess(user,targetDmId))!==true)return;
+      if(savedUser?.id!==attachmentSessionUserId)return;
       const attachment=await uploadVesselFile(file,user); if(!attachment)return;
+      if(savedUser?.id!==attachmentSessionUserId){await cleanupFailedAttachment(attachment);return;}
       if(targetDmId&&(await verifyDirectMessageAccess(user,targetDmId))!==true){await cleanupFailedAttachment(attachment);return;}
+      if(savedUser?.id!==attachmentSessionUserId){await cleanupFailedAttachment(attachment);return;}
       const body=`📎 ${file.name}`;
       if(targetDmId){
         const peerId=targetDmId;
-        const {error}=await supabase.from('direct_messages').insert({sender_id:user.id,receiver_id:peerId,body,attachments:[attachment]});
+        const {error}=await supabase.from('direct_messages').insert({sender_id:attachmentSessionUserId,receiver_id:peerId,body,attachments:[attachment]});
+        if(savedUser?.id!==attachmentSessionUserId){if(error)await cleanupFailedAttachment(attachment);return;}
         if(error){
           await cleanupFailedAttachment(attachment);
           const access=await verifyDirectMessageAccess(user,peerId,{notify:false});
@@ -1326,12 +1346,14 @@ function render() {
         if(activeDmId===peerId)refreshes.push(loadDirectMessages(user,peerId));
         await Promise.all(refreshes);
       } else {
-        const {error}=await supabase.from('messages').insert({channel_id:targetChannelId,author_id:user.id,body,attachments:[attachment]});
+        const {error}=await supabase.from('messages').insert({channel_id:targetChannelId,author_id:attachmentSessionUserId,body,attachments:[attachment]});
+        if(savedUser?.id!==attachmentSessionUserId){if(error)await cleanupFailedAttachment(attachment);return;}
         if(error){await cleanupFailedAttachment(attachment);vesselNotice(`Не удалось отправить файл: ${error.message}`,'error');return;}
         if(!activeDmId&&activeChannelId===targetChannelId&&activeChannelKind==='text'){
           messages.push({name:user.name,time:'только что',color:user.avatarColor||'#39d9a6',text:body,attachments:[attachment]});
         }
       }
+      if(savedUser?.id!==attachmentSessionUserId)return;
       render();
     };
     picker.click();
