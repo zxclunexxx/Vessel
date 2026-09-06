@@ -34,6 +34,7 @@ required = [
     'function cancelVoiceReconnect()',
     'async function endCall(notify=true)',
     'function subscribeChannel(channel,onDisconnect=null)',
+    'async function verifyDirectMessageAccess(user,peerId,{notify=true}={})',
     "supabase.functions.invoke('search-user'",
     "supabase.functions.invoke('join-server'",
     'function vesselDialog(',
@@ -43,6 +44,10 @@ required = [
     'function getActiveServer()',
     'function setActiveServer(serverOrId)',
     "localStorage.getItem('vesselActiveServerId')",
+    'let serversSyncRevision = 0;',
+    'let socialSyncRevision = 0;',
+    'let dmThreadsSyncRevision = 0;',
+    'let notificationsSyncRevision = 0;',
     'callInviteTimer',
     'vessel-memberships-',
     'vessel-channels-',
@@ -153,5 +158,44 @@ if "if(activeDmId||activeChannelId!==channelId||activeChannelKind!=='text')retur
     raise SystemExit('Channel message loader must discard stale async responses')
 if 'if(activeDmId!==friendId)return;' not in dm_load:
     raise SystemExit('Direct-message loader must discard stale async responses')
+
+# Multi-request state loaders must publish only the newest response for the current session.
+servers_start=main.find('async function syncSupabaseServers(user)')
+social_start=main.find('async function syncSocial(user)')
+threads_start=main.find('async function syncDmThreads(user)')
+notifications_start=main.find('async function syncNotifications(user)')
+if min(servers_start,social_start,threads_start,notifications_start) < 0:
+    raise SystemExit('Missing async state loaders')
+servers_block=main[servers_start:servers_start+2600]
+social_block=main[social_start:social_start+3600]
+threads_block=main[threads_start:threads_start+1300]
+notifications_block=main[notifications_start:notifications_start+1400]
+if servers_block.count('revision!==serversSyncRevision') < 2 or 'const nextServers=' not in servers_block:
+    raise SystemExit('Server list sync must reject stale responses before publishing state')
+if social_block.count('revision!==socialSyncRevision') < 3 or 'let nextFriends = [];' not in social_block:
+    raise SystemExit('Social sync must reject stale responses and publish friends atomically')
+if 'revision!==dmThreadsSyncRevision' not in threads_block:
+    raise SystemExit('DM thread sync must reject stale RPC responses')
+if 'revision!==notificationsSyncRevision' not in notifications_block:
+    raise SystemExit('Notification sync must reject stale session/revision responses')
+
+# Resetting authenticated runtime must invalidate every outstanding state fetch.
+reset_start=main.find('function resetAuthenticatedRuntime()')
+if reset_start < 0:
+    raise SystemExit('Missing authenticated runtime reset')
+reset_block=main[reset_start:reset_start+3200]
+for marker in ['serversSyncRevision++;','socialSyncRevision++;','dmThreadsSyncRevision++;','notificationsSyncRevision++;','window.__vesselNotificationsLoaded=false;']:
+    if marker not in reset_block:
+        raise SystemExit(f'Authenticated reset does not invalidate async state: {marker}')
+
+# A DM can remain visible after unfriend, but sending must re-check the friendship in the DB.
+composer_start=main.find("document.querySelector('.composer').addEventListener('submit'")
+if composer_start < 0:
+    raise SystemExit('Missing message composer submit handler')
+composer_block=main[composer_start:composer_start+4600]
+if 'verifyDirectMessageAccess(user,peerId)' not in composer_block:
+    raise SystemExit('DM send must verify current friendship before insert')
+if 'verifyDirectMessageAccess(user,peerId,{notify:false})' not in composer_block:
+    raise SystemExit('Failed DM inserts must re-check friendship before surfacing a generic error')
 
 print('Vessel authenticated runtime smoke check passed')
