@@ -4,10 +4,35 @@ path = Path('src/main.js')
 text = path.read_text(encoding='utf-8')
 changed = False
 
+VOICE_CAPTURE_MARKERS = [
+    "voiceServerId=getActiveServer()?.dbId||null;",
+    "voiceServerId=targetServerId;",
+]
+LIFECYCLE_MARKERS = [
+    'let voiceServerId = null;',
+    "payload.eventType==='DELETE'&&voiceStream&&voiceServerId===row.server_id",
+    "payload.eventType==='DELETE'&&voiceStream&&row?.id===voiceChannelId",
+    'if(voiceStream&&voiceServerId===server.dbId)await leaveVoiceRoom();',
+]
 
-def replace_once(old, new, label):
+
+def hardening_complete():
+    return all(marker in text for marker in LIFECYCLE_MARKERS) and any(marker in text for marker in VOICE_CAPTURE_MARKERS)
+
+
+# Newer reconnect/switch hardening captures the target server before joining voice
+# and therefore uses targetServerId instead of re-reading the currently active server.
+# Both forms satisfy this older lifecycle migration. Avoid replaying stale anchors when
+# a later patch has already evolved the same code path.
+if hardening_complete():
+    print('Vessel voice lifecycle hardening already applied; nothing to change')
+    raise SystemExit(0)
+
+
+def replace_once(old, new, label, already_markers=()):
     global text, changed
-    if new in text:
+    if new in text or any(marker in text for marker in already_markers):
+        print(f'{label}: already applied')
         return
     if old not in text:
         raise SystemExit(f'{label} anchor not found')
@@ -24,10 +49,12 @@ replace_once(
 )
 
 # Joining a voice channel captures its owning server at the same time as its channel id.
+# Later reconnect hardening legitimately evolved this to targetServerId.
 replace_once(
     "    voiceChannelId=targetChannelId;\n    room=supabase.channel(`voice-${targetChannelId}`,{config:{presence:{key:user.id}}});",
     "    voiceChannelId=targetChannelId;\n    voiceServerId=getActiveServer()?.dbId||null;\n    room=supabase.channel(`voice-${targetChannelId}`,{config:{presence:{key:user.id}}});",
     'voice server capture',
+    already_markers=("voiceServerId=targetServerId;",),
 )
 
 # Leaving voice must clear both channel and server ownership state.
@@ -106,15 +133,11 @@ replace_once(
     'local server leave voice disconnect',
 )
 
-for marker in [
-    'let voiceServerId = null;',
-    "voiceServerId=getActiveServer()?.dbId||null;",
-    "payload.eventType==='DELETE'&&voiceStream&&voiceServerId===row.server_id",
-    "payload.eventType==='DELETE'&&voiceStream&&row?.id===voiceChannelId",
-    'if(voiceStream&&voiceServerId===server.dbId)await leaveVoiceRoom();',
-]:
-    if marker not in text:
-        raise SystemExit(f'missing voice lifecycle hardening marker: {marker}')
+if not hardening_complete():
+    missing=[marker for marker in LIFECYCLE_MARKERS if marker not in text]
+    if not any(marker in text for marker in VOICE_CAPTURE_MARKERS):
+        missing.append('voice server capture')
+    raise SystemExit(f"missing voice lifecycle hardening marker(s): {', '.join(missing)}")
 
 if changed:
     path.write_text(text, encoding='utf-8')
