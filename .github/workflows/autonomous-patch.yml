@@ -8,6 +8,7 @@ on:
       - 'scripts/session_patch.py'
       - 'scripts/lifecycle_patch.py'
       - 'scripts/attachment_context_patch.py'
+      - 'scripts/attachment_storage_context_patch.py'
       - 'scripts/call_security_patch.py'
       - 'scripts/profile_privacy_patch.py'
       - 'scripts/dm_thread_security_patch.py'
@@ -47,6 +48,7 @@ jobs:
           if [ -f scripts/session_patch.py ]; then python scripts/session_patch.py; fi
           if [ -f scripts/lifecycle_patch.py ]; then python scripts/lifecycle_patch.py; fi
           if [ -f scripts/attachment_context_patch.py ]; then python scripts/attachment_context_patch.py; fi
+          if [ -f scripts/attachment_storage_context_patch.py ]; then python scripts/attachment_storage_context_patch.py; fi
           if [ -f scripts/call_security_patch.py ]; then python scripts/call_security_patch.py; fi
           if [ -f scripts/profile_privacy_patch.py ]; then python scripts/profile_privacy_patch.py; fi
           if [ -f scripts/dm_thread_security_patch.py ]; then python scripts/dm_thread_security_patch.py; fi
