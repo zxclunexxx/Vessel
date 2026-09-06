@@ -288,19 +288,18 @@ async function loadDirectMessages(user, friendId) {
   if(savedUser?.id!==dmLoadUserId)return;
   const {data,error} = await supabase.from('direct_messages').select('id,sender_id,receiver_id,body,attachments,created_at,profiles!direct_messages_sender_id_fkey(username,avatar_color)').or(`and(sender_id.eq.${dmLoadUserId},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${dmLoadUserId})`).order('created_at',{ascending:false}).limit(100);
   if(savedUser?.id!==dmLoadUserId||activeDmId!==friendId)return;
+  if(activeDmId!==friendId)return;
   if(error){vesselNotice('Не удалось загрузить личные сообщения.','error');return;}
   dmMessages = (data || []).reverse().map(row => ({name:row.profiles?.username || 'Пользователь',time:new Date(row.created_at).toLocaleString('ru-RU'),color:row.profiles?.avatar_color || '#8b7cff',text:row.body,attachments:row.attachments||[]}));
   render();
 }
-async function uploadVesselFile(file, user) {
+async function uploadVesselFile(file, user, context) {
   if (!supabase || !user?.id) { vesselNotice('Для загрузки файлов нужен настоящий аккаунт.','error'); return null; }
   if(file.size>25*1024*1024){vesselNotice('Максимальный размер файла — 25 МБ.','error');return null;}
-  let context=null;
-  if(activeDmId)context=`dm/${activeDmId}`;
-  else if(activeChannelId&&activeChannelKind==='text')context=`channel/${activeChannelId}`;
-  if(!context){vesselNotice('Открой личный чат или текстовый канал перед загрузкой файла.','error');return null;}
+  const storageContext=String(context||'');
+  if(!/^(dm|channel)\/[^/]+$/.test(storageContext)){vesselNotice('Контекст загрузки файла устарел. Выбери чат или канал ещё раз.','error');return null;}
   const safeName=file.name.replace(/[^a-zA-Z0-9._-]/g,'_')||'file';
-  const objectPath=`${user.id}/${context}/${crypto.randomUUID()}-${safeName}`;
+  const objectPath=`${user.id}/${storageContext}/${crypto.randomUUID()}-${safeName}`;
   const {error}=await supabase.storage.from('vessel-files').upload(objectPath,file,{contentType:file.type||'application/octet-stream',upsert:false});
   if(error){vesselNotice(`Файл не загрузился: ${error.message}`,'error');return null;}
   return {name:file.name,path:objectPath,type:file.type||'application/octet-stream',size:file.size};
@@ -1325,7 +1324,8 @@ function render() {
       if(!targetDmId&&!targetChannelId){vesselNotice('Открой текстовый канал или личный чат.','error');return;}
       if(targetDmId&&(await verifyDirectMessageAccess(user,targetDmId))!==true)return;
       if(savedUser?.id!==attachmentSessionUserId)return;
-      const attachment=await uploadVesselFile(file,user); if(!attachment)return;
+      const attachmentContext=targetDmId?`dm/${targetDmId}`:`channel/${targetChannelId}`;
+      const attachment=await uploadVesselFile(file,user,attachmentContext); if(!attachment)return;
       if(savedUser?.id!==attachmentSessionUserId){await cleanupFailedAttachment(attachment);return;}
       if(targetDmId&&(await verifyDirectMessageAccess(user,targetDmId))!==true){await cleanupFailedAttachment(attachment);return;}
       if(savedUser?.id!==attachmentSessionUserId){await cleanupFailedAttachment(attachment);return;}
