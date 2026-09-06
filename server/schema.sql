@@ -317,6 +317,7 @@ create policy "profiles visible to related users" on public.profiles for select 
   or exists(select 1 from public.friendships f where (f.user_id=(select auth.uid()) and f.friend_id=profiles.id) or (f.friend_id=(select auth.uid()) and f.user_id=profiles.id))
   or exists(select 1 from public.friend_requests fr where (fr.sender_id=(select auth.uid()) and fr.receiver_id=profiles.id) or (fr.receiver_id=(select auth.uid()) and fr.sender_id=profiles.id))
   or exists(select 1 from public.server_members mine join public.server_members theirs on theirs.server_id=mine.server_id where mine.user_id=(select auth.uid()) and theirs.user_id=profiles.id)
+  or exists(select 1 from public.direct_messages dm where (dm.sender_id=(select auth.uid()) and dm.receiver_id=profiles.id) or (dm.receiver_id=(select auth.uid()) and dm.sender_id=profiles.id))
 );
 create policy "own profile update" on public.profiles for update to authenticated
 using(id=(select auth.uid())) with check(id=(select auth.uid()));
@@ -448,12 +449,12 @@ using(bucket_id='vessel-files' and owner_id=(select auth.uid())::text);
 -- service-role-only RPCs above. Their TypeScript source is deployed in Supabase.
 
 
--- Safe list of direct-message peers for the authenticated user. This avoids broadening
--- profiles RLS (profiles also stores email) while keeping old conversations discoverable.
+-- Safe list of direct-message peers for the authenticated user. The function runs as the
+-- caller and relies on direct_messages/profile RLS plus profile column grants.
 create or replace function public.vessel_dm_threads()
 returns table(peer_id uuid, username text, avatar_color text, status text, last_message_at timestamptz)
 language sql
-security definer
+security invoker
 set search_path = public
 stable
 as $$
