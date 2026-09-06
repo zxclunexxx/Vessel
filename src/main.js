@@ -564,6 +564,7 @@ async function ensureCallInbox(user) {
     if (!payload || payload.to !== user.id) return;
     if (payload.type === 'invite') {
       const caller=await resolveCallableFriend(user,payload.from);
+      if(callInboxChannel!==inbox||savedUser?.id!==user.id)return;
       if(!caller){console.warn('Ignored call invite from non-friend');return;}
       if (callConnection || callStream || incomingCall) {
         await sendCallInvite(user, payload.from, {type:'busy'});
@@ -700,9 +701,12 @@ async function startCall(video,user) {
   if(!activeDmId||!supabase||!user?.id){vesselNotice('Открой личный чат с настоящим другом, чтобы начать звонок.','error');return;}
   if(incomingCall){vesselNotice('Сначала ответь на входящий вызов или отклони его.','error');return;}
   if(callConnection || callStream){await endCall(true);return;}
+  const peerId=activeDmId;
   try {
+    if((await verifyDirectMessageAccess(user,peerId))!==true)return;
+    if(savedUser?.id!==user.id||activeDmId!==peerId)return;
     if(voiceStream)await leaveVoiceRoom();
-    const peerId=activeDmId;
+    if(savedUser?.id!==user.id||activeDmId!==peerId)return;
     callPeer=peerId; callPeerName=currentDm||'Пользователь'; callVideo=!!video; callAccepted=false; callOffer=null; localIceCandidates=[]; callMicEnabled=true; callCameraEnabled=!!video;
     callStream=await navigator.mediaDevices.getUserMedia({audio:true,video:!!video});
     prepareCallConnection(user,peerId,!!video);
@@ -724,7 +728,16 @@ async function startCall(video,user) {
 }
 async function acceptIncomingCall(user) {
   if (!incomingCall || !user?.id) return;
-  const invite=incomingCall; incomingCall=null; callPeer=invite.from; callPeerName=invite.name; callVideo=invite.video; callAccepted=true; callMicEnabled=true; callCameraEnabled=invite.video;
+  const invite=incomingCall;
+  const access=await verifyDirectMessageAccess(user,invite.from);
+  if(incomingCall!==invite||savedUser?.id!==user.id)return;
+  if(access!==true){
+    incomingCall=null;
+    await sendCallInvite(user,invite.from,{type:'decline'});
+    render();
+    return;
+  }
+  incomingCall=null; callPeer=invite.from; callPeerName=invite.name; callVideo=invite.video; callAccepted=true; callMicEnabled=true; callCameraEnabled=invite.video;
   activeDmId=invite.from; currentDm=invite.name; friendsOpen=false; window.__vesselDmLoaded=false;
   try {
     if(voiceStream)await leaveVoiceRoom();
