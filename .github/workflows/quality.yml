@@ -20,6 +20,8 @@ jobs:
           node-version: '24'
       - name: Authenticated runtime smoke check
         run: python scripts/runtime_smoke_check.py
+      - name: DM history lifecycle smoke check
+        run: python scripts/dm_history_smoke_check.py
       - name: JavaScript syntax check
         run: node --check src/main.js
       - name: Install locked dependencies
