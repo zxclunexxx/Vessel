@@ -930,13 +930,23 @@ function connectSupabaseRealtime(user) {
       if(!server)return;
       server.name=row.name||server.name;server.icon=row.icon||server.icon;render();
     }).subscribe(),
-    supabase.channel(`vessel-notifications-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{
-      const row=payload.new;
-      notificationsSyncRevision++;
-      window.__vesselNotificationsLoaded=true;
-      notifications=[row,...notifications.filter(item=>item.id!==row.id)];
-      render();
-    }).subscribe()
+    supabase.channel(`vessel-notifications-${user.id}`)
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{
+        const row=payload.new;
+        notificationsSyncRevision++;
+        window.__vesselNotificationsLoaded=true;
+        notifications=[row,...notifications.filter(item=>item.id!==row.id)];
+        render();
+      })
+      .on('postgres_changes',{event:'UPDATE',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{
+        const row=payload.new;
+        if(!row?.id)return;
+        notificationsSyncRevision++;
+        window.__vesselNotificationsLoaded=true;
+        notifications=notifications.map(item=>item.id===row.id?{...item,...row}:item);
+        render();
+      })
+      .subscribe()
   ];
 }
 
