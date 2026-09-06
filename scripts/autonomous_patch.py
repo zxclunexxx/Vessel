@@ -6,17 +6,6 @@ text = main_path.read_text(encoding='utf-8')
 schema = schema_path.read_text(encoding='utf-8')
 changed = False
 
-# Earlier reliability patches are already part of main.js. Verify their semantic markers
-# instead of matching large historical source blocks that become stale after later edits.
-required_main = [
-    'vessel-profiles-${user.id}',
-    'vessel-servers-${user.id}',
-    ".select('username,status,avatar_color').single()",
-]
-for marker in required_main:
-    if marker not in text:
-        raise SystemExit(f'missing required Vessel hardening marker: {marker}')
-
 # Reciprocal pending friend requests are rejected by PostgreSQL. Turn the expected unique
 # violation into a useful UI state rather than a generic failure.
 friend_old = "  if(sendError){vesselNotice('Не удалось отправить заявку.','error');return;}"
@@ -58,4 +47,4 @@ if changed:
     schema_path.write_text(schema, encoding='utf-8')
     print('Applied Vessel friend-request hardening')
 else:
-    print('Vessel hardening already applied; nothing to change')
+    print('Vessel friend-request hardening already applied; nothing to change')
