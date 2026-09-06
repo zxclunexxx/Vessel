@@ -1,0 +1,50 @@
+name: Pin Vessel npm dependencies
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/pin-dependencies.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vessel-pin-dependencies
+  cancel-in-progress: false
+
+jobs:
+  pin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Generate deterministic lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Verify production dependency security
+        run: npm audit --omit=dev --audit-level=high
+      - name: Report build-tool vulnerabilities
+        run: npm audit --audit-level=high || true
+      - name: Commit lockfile
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo "package-lock.json is already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "chore: pin npm dependency graph"
+          for attempt in 1 2 3; do
+            if git push; then exit 0; fi
+            git fetch origin main
+            git rebase origin/main
+          done
+          echo "Unable to push package-lock.json" >&2
+          exit 1
