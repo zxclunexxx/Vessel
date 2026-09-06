@@ -1368,8 +1368,12 @@ function render() {
     if(callPeer===friendId)await endCall(false);
     const {error}=await supabase.from('friendships').delete().or(`and(user_id.eq.${user.id},friend_id.eq.${friendId}),and(user_id.eq.${friendId},friend_id.eq.${user.id})`);
     if(error){vesselNotice(`Не удалось удалить друга: ${error.message}`,'error');return;}
-    if(activeDmId===friendId){activeDmId=null;currentDm=null;dmMessages=[];window.__vesselDmLoaded=false;}
-    window.__vesselSocialLoaded=false;await syncSocial(user);render();
+    const keepActiveHistory=activeDmId===friendId;
+    if(keepActiveHistory)window.__vesselDmLoaded=false;
+    window.__vesselSocialLoaded=false;
+    window.__vesselDmThreadsLoaded=false;
+    await Promise.all([syncSocial(user),syncDmThreads(user)]);
+    if(keepActiveHistory&&activeDmId===friendId)await loadDirectMessages(user,friendId);else render();
   }));
   document.querySelectorAll('[data-cancel-request]').forEach(button=>button.addEventListener('click',async()=>{
     if(!supabase||!user.id)return;
