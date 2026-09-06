@@ -5,6 +5,20 @@ path = Path('src/main.js')
 text = path.read_text(encoding='utf-8')
 changed = False
 
+# Later DM-access hardening intentionally extends both send paths, so exact historical
+# blocks are no longer stable anchors. If the durable destination-safety state already
+# exists, treat this patch as complete and let newer patches continue.
+DESTINATION_MARKERS = [
+    'const targetDmId=activeDmId;',
+    "const targetChannelId=!targetDmId&&activeChannelKind==='text'?activeChannelId:null;",
+    'const refreshes=[syncDmThreads(user)];',
+    'const channelId=activeChannelId;',
+    'cleanupFailedAttachment(attachment)',
+]
+if all(marker in text for marker in DESTINATION_MARKERS):
+    print('Async message/attachment destination hardening already applied; nothing to change')
+    raise SystemExit(0)
+
 attachment_old = """    picker.onchange=async()=>{
       const file=picker.files[0]; if(!file)return;
       const attachment=await uploadVesselFile(file,user); if(!attachment)return;
@@ -64,13 +78,7 @@ if composer_new not in text:
     text = text.replace(composer_old, composer_new, 1)
     changed = True
 
-for marker in [
-    'const targetDmId=activeDmId;',
-    'const targetChannelId=!targetDmId',
-    'const refreshes=[syncDmThreads(user)];',
-    'const channelId=activeChannelId;',
-    'cleanupFailedAttachment(attachment)',
-]:
+for marker in DESTINATION_MARKERS:
     if marker not in text:
         raise SystemExit(f'missing async destination hardening marker: {marker}')
 
