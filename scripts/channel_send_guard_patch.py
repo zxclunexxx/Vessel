@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Re-run through the autonomous verifier after wiring this patch into the workflow trigger.
 path=Path('src/main.js')
 text=path.read_text(encoding='utf-8')
 changed=False
