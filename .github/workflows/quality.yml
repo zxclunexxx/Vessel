@@ -19,7 +19,7 @@ jobs:
         with:
           node-version: '24'
       - name: Authenticated runtime smoke check
-        run: python scripts/runtime_smoke_check.py
+        run: python scripts/runtime_smoke_check_current.py
       - name: DM history lifecycle smoke check
         run: python scripts/dm_history_smoke_check.py
       - name: Media context smoke check
