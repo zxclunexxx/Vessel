@@ -425,9 +425,16 @@ async function toggleVoiceRoom(user,reconnecting=false){
   let room=null;
   try{
     const targetChannelId=activeChannelId;
-    voiceStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+    const targetServerId=getActiveServer()?.dbId||null;
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+    if(savedUser?.id!==user.id||activeChannelId!==targetChannelId||activeChannelKind!=='voice'||getActiveServer()?.dbId!==targetServerId||callConnection||callStream||incomingCall){
+      stream.getTracks().forEach(track=>track.stop());
+      if(reconnecting)cancelVoiceReconnect();
+      return;
+    }
+    voiceStream=stream;
     voiceChannelId=targetChannelId;
-    voiceServerId=getActiveServer()?.dbId||null;
+    voiceServerId=targetServerId;
     room=supabase.channel(`voice-${targetChannelId}`,{config:{presence:{key:user.id}}});
     voiceRoom=room;
     room.on('broadcast',{event:'voice-signal'},({payload})=>handleVoiceSignal(user,payload).catch(error=>console.warn('Voice signal failed',error)));
@@ -690,7 +697,16 @@ async function handleCallSignal(user,peerId,signal,video) {
   if(signal.type==='ice'){if(callConnection?.remoteDescription) await callConnection.addIceCandidate(signal.candidate); else pendingIceCandidates.push(signal.candidate);return;}
   if(signal.type==='offer'){
     callPeer=peerId; callPeerName=callPeerName||'Пользователь';
-    if(!callStream) callStream=await navigator.mediaDevices.getUserMedia({audio:true,video:!!video});
+    if(!callStream){
+      const signalStream=await navigator.mediaDevices.getUserMedia({audio:true,video:!!video});
+      const signalAccess=await verifyDirectMessageAccess(user,peerId,{notify:false});
+      if(savedUser?.id!==user.id||callPeer!==peerId||signalAccess!==true){
+        signalStream.getTracks().forEach(track=>track.stop());
+        if(savedUser?.id===user.id&&callPeer===peerId)await endCall(false);
+        return;
+      }
+      callStream=signalStream;
+    }
     callVideo=!!video; prepareCallConnection(user,peerId,!!video); await callConnection.setRemoteDescription(signal.description);
     for(const candidate of pendingIceCandidates) await callConnection.addIceCandidate(candidate); pendingIceCandidates=[];
     const answer=await callConnection.createAnswer(); await callConnection.setLocalDescription(answer); await sendCallSignal(user,peerId,{type:'answer',description:answer},video); render(); return;
@@ -708,7 +724,14 @@ async function startCall(video,user) {
     if(voiceStream)await leaveVoiceRoom();
     if(savedUser?.id!==user.id||activeDmId!==peerId)return;
     callPeer=peerId; callPeerName=currentDm||'Пользователь'; callVideo=!!video; callAccepted=false; callOffer=null; localIceCandidates=[]; callMicEnabled=true; callCameraEnabled=!!video;
-    callStream=await navigator.mediaDevices.getUserMedia({audio:true,video:!!video});
+    const mediaStream=await navigator.mediaDevices.getUserMedia({audio:true,video:!!video});
+    const accessAfterMedia=await verifyDirectMessageAccess(user,peerId,{notify:false});
+    if(savedUser?.id!==user.id||activeDmId!==peerId||callPeer!==peerId||incomingCall||accessAfterMedia!==true){
+      mediaStream.getTracks().forEach(track=>track.stop());
+      if(savedUser?.id===user.id&&callPeer===peerId)await endCall(false);
+      return;
+    }
+    callStream=mediaStream;
     prepareCallConnection(user,peerId,!!video);
     const offer=await callConnection.createOffer();
     await callConnection.setLocalDescription(offer);
@@ -741,7 +764,15 @@ async function acceptIncomingCall(user) {
   activeDmId=invite.from; currentDm=invite.name; friendsOpen=false; window.__vesselDmLoaded=false;
   try {
     if(voiceStream)await leaveVoiceRoom();
-    callStream=await navigator.mediaDevices.getUserMedia({audio:true,video:callVideo});
+    if(savedUser?.id!==user.id||callPeer!==invite.from||!callAccepted)return;
+    const acceptedStream=await navigator.mediaDevices.getUserMedia({audio:true,video:callVideo});
+    const acceptedAccess=await verifyDirectMessageAccess(user,invite.from,{notify:false});
+    if(savedUser?.id!==user.id||callPeer!==invite.from||!callAccepted||acceptedAccess!==true){
+      acceptedStream.getTracks().forEach(track=>track.stop());
+      if(savedUser?.id===user.id&&callPeer===invite.from)await endCall(false);
+      return;
+    }
+    callStream=acceptedStream;
     await ensureCallChannel(user,callPeer);
     const delivered=await sendCallInvite(user,callPeer,{type:'accept',video:callVideo});
     if(!delivered)throw new Error('CALL_ACCEPT_DELIVERY_FAILED');
