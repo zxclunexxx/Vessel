@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Idempotent patch: secure Vessel WebRTC signaling and voice presence with private Realtime.
 main_path = Path('src/main.js')
 schema_path = Path('server/schema.sql')
 main = main_path.read_text(encoding='utf-8')
