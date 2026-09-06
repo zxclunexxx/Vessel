@@ -1,6 +1,9 @@
 from pathlib import Path
 
 # Idempotent patch: secure Vessel WebRTC signaling and voice presence with private Realtime.
+# Supabase Realtime Authorization is evaluated when a client joins a private topic, so the
+# database policies below authorize topic access; they intentionally do not inspect individual
+# broadcast payloads as if RLS were re-evaluated for every message.
 main_path = Path('src/main.js')
 schema_path = Path('server/schema.sql')
 main = main_path.read_text(encoding='utf-8')
@@ -44,9 +47,9 @@ if schema_marker not in schema:
     if anchor not in schema:
         raise SystemExit('RLS schema anchor not found')
     block = r'''-- Vessel private Realtime authorization -----------------------------------------
--- Call/voice WebRTC signaling uses private Supabase Realtime topics. Read access is scoped
--- to the current inbox, the current friendship pair, or an authorized voice channel; writes
--- additionally bind broadcast payload.from to auth.uid() to prevent sender spoofing.
+-- Call/voice WebRTC signaling uses private Supabase Realtime topics. Realtime Authorization
+-- is calculated and cached when a client joins a topic, so policies intentionally rely on
+-- authenticated topic access (friendship / voice-channel visibility), not per-message payload data.
 alter table realtime.messages enable row level security;
 drop policy if exists "vessel realtime receive" on realtime.messages;
 drop policy if exists "vessel realtime send" on realtime.messages;
@@ -92,20 +95,15 @@ to authenticated
 with check (
   (
     realtime.messages.extension = 'broadcast'
-    and realtime.messages.event = 'call'
-    and (realtime.messages.payload ->> 'from') = (select auth.uid())::text
     and exists (
       select 1
       from public.friendships f
       where f.user_id = (select auth.uid())
         and realtime.topic() = ('vessel-call-inbox-' || f.friend_id::text)
-        and (realtime.messages.payload ->> 'to') = f.friend_id::text
     )
   )
   or (
     realtime.messages.extension = 'broadcast'
-    and realtime.messages.event = 'signal'
-    and (realtime.messages.payload ->> 'from') = (select auth.uid())::text
     and exists (
       select 1
       from public.friendships f
@@ -116,22 +114,10 @@ with check (
           || '-'
           || greatest((select auth.uid())::text, f.friend_id::text)
         )
-        and (realtime.messages.payload ->> 'to') = f.friend_id::text
     )
   )
   or (
-    realtime.messages.extension = 'broadcast'
-    and realtime.messages.event = 'voice-signal'
-    and (realtime.messages.payload ->> 'from') = (select auth.uid())::text
-    and exists (
-      select 1
-      from public.channels c
-      where c.kind = 'voice'
-        and realtime.topic() = ('voice-' || c.id::text)
-    )
-  )
-  or (
-    realtime.messages.extension = 'presence'
+    realtime.messages.extension in ('broadcast','presence')
     and exists (
       select 1
       from public.channels c
@@ -153,7 +139,13 @@ required_main = [
 for marker in required_main:
     if marker not in main:
         raise SystemExit(f'missing secured Realtime client marker: {marker}')
-for marker in [schema_marker, 'vessel realtime receive', 'vessel realtime send', "payload ->> 'from'"]:
+for marker in [
+    schema_marker,
+    'vessel realtime receive',
+    'vessel realtime send',
+    "realtime.topic() = ('vessel-call-inbox-' || f.friend_id::text)",
+    "realtime.messages.extension in ('broadcast','presence')",
+]:
     if marker not in schema:
         raise SystemExit(f'missing secured Realtime schema marker: {marker}')
 
