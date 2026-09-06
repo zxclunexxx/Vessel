@@ -1,0 +1,54 @@
+name: Test Electron 44 upgrade
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Regenerate lockfile for Electron 44
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Install locked dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: npm ci
+      - name: Full high-severity audit
+        run: npm audit --audit-level=high
+      - name: JavaScript syntax check
+        run: node --check src/main.js
+      - name: Production build
+        run: npm run build
+      - name: Upload candidate lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-44-package-lock
+          path: package-lock.json
+          if-no-files-found: error
+
+  windows-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Regenerate lockfile for Electron 44
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Install candidate dependencies
+        run: npm ci
+      - name: Package Windows portable EXE
+        run: npm run desktop:package
+      - name: Upload candidate EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vessel-electron-44-windows-exe
+          path: release/*.exe
+          if-no-files-found: error
