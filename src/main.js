@@ -393,7 +393,10 @@ async function leaveVoiceRoom(){
 
 async function toggleVoiceRoom(user,reconnecting=false){
   if(!reconnecting)cancelVoiceReconnect();
-  if(voiceStream && voiceChannelId===activeChannelId){await leaveVoiceRoom();return;}
+  if(voiceStream){
+    if(voiceChannelId===activeChannelId){await leaveVoiceRoom();return;}
+    await leaveVoiceRoom();
+  }
   if(!supabase||!user?.id||!activeChannelId||activeChannelKind!=='voice'){vesselNotice('Сначала открой голосовой канал.','error');return;}
   if(callConnection||callStream||incomingCall){vesselNotice('Заверши личный звонок или отклони входящий вызов перед входом в голосовой канал.','error');return;}
   if(voiceStream && voiceChannelId!==activeChannelId){await leaveVoiceRoom();}
