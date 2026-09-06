@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Re-run after autonomous CI gained safe rebase/retry support for concurrent main updates.
 main_path = Path('src/main.js')
 schema_path = Path('server/schema.sql')
 text = main_path.read_text(encoding='utf-8')
