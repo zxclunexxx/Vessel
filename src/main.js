@@ -724,7 +724,15 @@ function connectSupabaseRealtime(user) {
     }).subscribe(),
     supabase.channel(`vessel-friends-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friend_requests',filter:`receiver_id=eq.${user.id}`},()=>{window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),
     supabase.channel(`vessel-friend-requests-out-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friend_requests',filter:`sender_id=eq.${user.id}`},()=>{window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),
-    supabase.channel(`vessel-friendships-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friendships',filter:`user_id=eq.${user.id}`},()=>{window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),
+    supabase.channel(`vessel-friendships-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friendships',filter:`user_id=eq.${user.id}`},async payload=>{
+      const row=payload.new?.friend_id?payload.new:payload.old;
+      if(payload.eventType==='DELETE'&&row?.friend_id){
+        if(incomingCall?.from===row.friend_id){incomingCall=null;render();}
+        if(callPeer===row.friend_id)await endCall(false);
+      }
+      window.__vesselSocialLoaded=false;
+      syncSocial(user);
+    }).subscribe(),
     supabase.channel(`vessel-memberships-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'server_members'},async payload=>{
       const row=payload.new?.server_id?payload.new:payload.old;
       if(!row)return;
@@ -1263,6 +1271,8 @@ function render() {
     const friendId=button.dataset.removeFriend;
     const friend=friends.find(item=>item.id===friendId);
     if(!await vesselConfirm(`Удалить ${friend?.username||'пользователя'} из друзей?`))return;
+    if(incomingCall?.from===friendId){incomingCall=null;render();}
+    if(callPeer===friendId)await endCall(false);
     const {error}=await supabase.from('friendships').delete().or(`and(user_id.eq.${user.id},friend_id.eq.${friendId}),and(user_id.eq.${friendId},friend_id.eq.${user.id})`);
     if(error){vesselNotice(`Не удалось удалить друга: ${error.message}`,'error');return;}
     if(activeDmId===friendId){activeDmId=null;currentDm=null;dmMessages=[];window.__vesselDmLoaded=false;}
