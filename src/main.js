@@ -933,11 +933,22 @@ function connectSupabaseRealtime(user) {
       if(activeDmId===row.id&&row.username){currentDm=row.username;dirty=true;}
       if(dirty)render();
     }).subscribe(),
-    supabase.channel(`vessel-servers-${user.id}`).on('postgres_changes',{event:'UPDATE',schema:'public',table:'servers'},payload=>{
-      const row=payload.new;
-      const server=row?.id?servers.find(item=>item.id===row.id):null;
+    supabase.channel(`vessel-servers-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'servers'},async payload=>{
+      const row=payload.new?.id?payload.new:payload.old;
+      if(!row?.id)return;
+      if(payload.eventType==='DELETE'){
+        if(voiceStream&&voiceServerId===row.id)await leaveVoiceRoom();
+        if(savedUser?.id!==user.id)return;
+        window.__vesselServersLoaded=false;
+        serversSyncRevision++;
+        await syncSupabaseServers(user);
+        return;
+      }
+      const server=servers.find(item=>item.id===row.id);
       if(!server)return;
-      server.name=row.name||server.name;server.icon=row.icon||server.icon;render();
+      server.name=row.name||server.name;
+      server.icon=row.icon||server.icon;
+      render();
     }).subscribe(),
     supabase.channel(`vessel-notifications-${user.id}`)
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{
