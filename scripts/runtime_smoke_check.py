@@ -73,6 +73,8 @@ required = [
     "activeChannelKind!=='text'",
     'maxlength="32"',
     'const selected=getActiveServer();',
+    "if(activeDmId||activeChannelId!==channelId||activeChannelKind!=='text')return;",
+    'if(activeDmId!==friendId)return;',
 ]
 for item in required:
     if item not in main:
@@ -138,5 +140,18 @@ if 'ensureCallChannel(savedUser,peerId)' not in call_block or 'Call signaling re
     raise SystemExit('Active call signaling must resubscribe after an established Realtime disconnect')
 if 'callConnection&&!callChannel' not in call_block:
     raise SystemExit('Call signaling reconnect must be scoped to an active WebRTC call')
+
+# Slow responses from a previously selected channel/DM must never overwrite the conversation
+# currently on screen. These guards execute immediately after each async message query returns.
+channel_load_start=main.find('async function loadChannelMessages(channelId)')
+dm_load_start=main.find('async function loadDirectMessages(user, friendId)')
+if channel_load_start < 0 or dm_load_start < 0:
+    raise SystemExit('Missing message loaders')
+channel_load=main[channel_load_start:channel_load_start+1200]
+dm_load=main[dm_load_start:dm_load_start+1600]
+if "if(activeDmId||activeChannelId!==channelId||activeChannelKind!=='text')return;" not in channel_load:
+    raise SystemExit('Channel message loader must discard stale async responses')
+if 'if(activeDmId!==friendId)return;' not in dm_load:
+    raise SystemExit('Direct-message loader must discard stale async responses')
 
 print('Vessel authenticated runtime smoke check passed')
