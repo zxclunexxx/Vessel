@@ -13,11 +13,24 @@ NOTIFICATION_MARKERS = [
     "notifications=[row,...notifications.filter(item=>item.id!==row.id)];",
 ]
 
+NOTIFICATION_READ_MARKERS = [
+    'const sessionUserId=user.id;',
+    'const unreadIds=notifications.filter(item=>!item.read_at).map(item=>item.id).filter(Boolean);',
+    'const readAt=new Date().toISOString();',
+    ".eq('user_id',sessionUserId).in('id',unreadIds).is('read_at',null).select('id')",
+    'if(savedUser?.id!==sessionUserId)return;',
+    "if(error){console.warn('Notification read update failed',error);vesselNotice('Не удалось отметить уведомления прочитанными.','error');return;}",
+    'const updatedIds=new Set((updated||[]).map(row=>row.id));',
+    'notifications=notifications.map(item=>updatedIds.has(item.id)&&!item.read_at?{...item,read_at:readAt}:item);',
+]
+
+ALL_MARKERS = [*NOTIFICATION_MARKERS, *NOTIFICATION_READ_MARKERS]
+
 # Later lifecycle patches may insert their own revision counters between these lines.
 # Once all observable notification hardening markers exist, treat the migration as
 # complete instead of requiring the original contiguous reset anchor forever.
-if all(marker in text for marker in NOTIFICATION_MARKERS):
-    print('Notification session and Realtime race hardening already applied; nothing to change')
+if all(marker in text for marker in ALL_MARKERS):
+    print('Notification session, Realtime, and read-state hardening already applied; nothing to change')
     raise SystemExit(0)
 
 
@@ -94,12 +107,41 @@ replace_once(
     'notification realtime revision guard',
 )
 
-for marker in NOTIFICATION_MARKERS:
+replace_once(
+    """  document.querySelector('#notifications').addEventListener('click', async () => {
+    vesselListDialog('Уведомления',notifications.map(item=>({title:item.title||'Vessel',body:item.body||'',meta:item.created_at?new Date(item.created_at).toLocaleString('ru-RU'):''})), 'Уведомлений пока нет');
+    const unread=notifications.filter(item=>!item.read_at);
+    if(unread.length&&supabase&&user.id){
+      await supabase.from('notifications').update({read_at:new Date().toISOString()}).eq('user_id',user.id).is('read_at',null);
+      notifications=notifications.map(item=>({...item,read_at:item.read_at||new Date().toISOString()}));
+      render();
+    }
+  });
+""",
+    """  document.querySelector('#notifications').addEventListener('click', async () => {
+    vesselListDialog('Уведомления',notifications.map(item=>({title:item.title||'Vessel',body:item.body||'',meta:item.created_at?new Date(item.created_at).toLocaleString('ru-RU'):''})), 'Уведомлений пока нет');
+    const sessionUserId=user.id;
+    const unreadIds=notifications.filter(item=>!item.read_at).map(item=>item.id).filter(Boolean);
+    if(unreadIds.length&&supabase&&sessionUserId){
+      const readAt=new Date().toISOString();
+      const {data:updated,error}=await supabase.from('notifications').update({read_at:readAt}).eq('user_id',sessionUserId).in('id',unreadIds).is('read_at',null).select('id');
+      if(savedUser?.id!==sessionUserId)return;
+      if(error){console.warn('Notification read update failed',error);vesselNotice('Не удалось отметить уведомления прочитанными.','error');return;}
+      const updatedIds=new Set((updated||[]).map(row=>row.id));
+      notifications=notifications.map(item=>updatedIds.has(item.id)&&!item.read_at?{...item,read_at:readAt}:item);
+      render();
+    }
+  });
+""",
+    'notification read snapshot/session guard',
+)
+
+for marker in ALL_MARKERS:
     if marker not in text:
         raise SystemExit(f'missing notification hardening marker: {marker}')
 
 if changed:
     path.write_text(text, encoding='utf-8')
-    print('Applied notification session and Realtime race hardening')
+    print('Applied notification session, Realtime, and read-state hardening')
 else:
-    print('Notification session and Realtime race hardening already applied; nothing to change')
+    print('Notification session, Realtime, and read-state hardening already applied; nothing to change')
