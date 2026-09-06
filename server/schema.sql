@@ -304,6 +304,14 @@ alter table public.direct_messages enable row level security;
 alter table public.server_invites enable row level security;
 alter table public.notifications enable row level security;
 
+
+-- Column-level profile privacy --------------------------------------------------
+-- RLS controls which profile rows an authenticated user may see. Column grants additionally
+-- ensure related users cannot query private Auth-facing fields such as email from those rows.
+revoke all on table public.profiles from anon, authenticated;
+grant select (id, username, avatar_color, status, created_at) on table public.profiles to authenticated;
+grant update (username, avatar_color, status) on table public.profiles to authenticated;
+
 create policy "profiles visible to related users" on public.profiles for select to authenticated using (
   id=(select auth.uid())
   or exists(select 1 from public.friendships f where (f.user_id=(select auth.uid()) and f.friend_id=profiles.id) or (f.friend_id=(select auth.uid()) and f.user_id=profiles.id))

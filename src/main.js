@@ -918,13 +918,13 @@ async function bootstrapAuth() {
   }
 
   const authUser = session.user;
-  const {data: profile, error: profileError} = await supabase.from('profiles').select('id,username,email,status,avatar_color').eq('id', authUser.id).maybeSingle();
+  const {data: profile, error: profileError} = await supabase.from('profiles').select('id,username,status,avatar_color').eq('id', authUser.id).maybeSingle();
   if (profileError) console.warn('Profile load failed', profileError);
 
   savedUser = {
     id: authUser.id,
     name: profile?.username || authUser.user_metadata?.username || authUser.email?.split('@')[0] || 'Пользователь',
-    email: profile?.email || authUser.email || '',
+    email: authUser.email || '',
     status: profile?.status || 'online',
     avatarColor: profile?.avatar_color || '#8b7cff'
   };
