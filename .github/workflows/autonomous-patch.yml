@@ -6,6 +6,7 @@ on:
       - 'scripts/autonomous_patch.py'
       - 'scripts/reliability_patch.py'
       - 'scripts/session_patch.py'
+      - 'scripts/lifecycle_patch.py'
 
 permissions:
   contents: write
@@ -27,6 +28,7 @@ jobs:
           python scripts/autonomous_patch.py
           if [ -f scripts/reliability_patch.py ]; then python scripts/reliability_patch.py; fi
           if [ -f scripts/session_patch.py ]; then python scripts/session_patch.py; fi
+          if [ -f scripts/lifecycle_patch.py ]; then python scripts/lifecycle_patch.py; fi
       - name: Check JavaScript syntax
         run: node --check src/main.js
       - name: Install dependencies
