@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Keep file sends bound to the conversation that owned the composer when selection began.
 path = Path('src/main.js')
 text = path.read_text(encoding='utf-8')
 
