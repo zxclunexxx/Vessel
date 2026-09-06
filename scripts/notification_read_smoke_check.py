@@ -29,4 +29,13 @@ for marker in required:
     if marker not in handler:
         raise SystemExit(f'Notification read guard missing: {marker}')
 
-print('Vessel notification read smoke check passed')
+realtime_required = [
+    "event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`",
+    "event:'UPDATE',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`",
+    'notifications=notifications.map(item=>item.id===row.id?{...item,...row}:item);',
+]
+for marker in realtime_required:
+    if marker not in main:
+        raise SystemExit(f'Notification realtime read-state sync missing: {marker}')
+
+print('Vessel notification read and cross-session realtime smoke check passed')
