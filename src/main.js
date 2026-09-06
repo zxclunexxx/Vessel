@@ -758,6 +758,111 @@ function connectSupabaseRealtime(user) {
 }
 
 let savedUser = null;
+let authStateSyncTimer = null;
+
+function resetAuthenticatedRuntime() {
+  const channels=[...(window.__vesselRealtimeChannels||[]),voiceRoom,callChannel,callInboxChannel].filter(Boolean);
+  window.__vesselRealtimeChannels=null;
+  voiceRoom=null;
+  callChannel=null;
+  callInboxChannel=null;
+
+  voiceStream?.getTracks().forEach(track=>track.stop());
+  callStream?.getTracks().forEach(track=>track.stop());
+  remoteCallStream?.getTracks?.().forEach(track=>track.stop?.());
+  voiceStream=null;
+  callStream=null;
+  remoteCallStream=null;
+  callConnection?.close();
+  callConnection=null;
+  for(const peerId of [...voicePeers.keys()])removeVoicePeer(peerId);
+  voiceParticipants=[];
+  voiceChannelId=null;
+  incomingCall=null;
+  callPeer=null;
+  callPeerName='';
+  callOffer=null;
+  callVideo=false;
+  callAccepted=false;
+  pendingIceCandidates=[];
+  localIceCandidates=[];
+  if(callInviteTimer){clearTimeout(callInviteTimer);callInviteTimer=null;}
+  callMicEnabled=true;
+  callCameraEnabled=true;
+
+  savedUser=null;
+  friends=[];
+  dmThreads=[];
+  friendRequests=[];
+  outgoingFriendRequests=[];
+  dmMessages=[];
+  notifications=[];
+  serverMembers=[];
+  messages=[];
+  dbChannels=[];
+  servers=[{id:'add-server',icon:'+',name:'Добавить сервер',add:true}];
+  activeServerId=null;
+  activeServerIndex=0;
+  activeChannelId=null;
+  activeChannelName='нет каналов';
+  activeChannelKind='text';
+  currentDm=null;
+  activeDmId=null;
+  friendsOpen=false;
+
+  window.__vesselDbLoaded=false;
+  window.__vesselServersLoaded=false;
+  window.__vesselSocialLoaded=false;
+  window.__vesselDmThreadsLoaded=false;
+  window.__vesselDmLoaded=false;
+  window.__vesselMembersServerId=null;
+  localStorage.removeItem('vesselUser');
+  localStorage.removeItem('vesselToken');
+  localStorage.removeItem('vesselActiveServerId');
+  return [...new Set(channels)];
+}
+
+async function cleanupAuthenticatedChannels(channels=[]) {
+  if(!supabase||!channels.length)return;
+  await Promise.allSettled(channels.map(channel=>supabase.removeChannel(channel)));
+}
+
+function scheduleAuthStateRefresh(session) {
+  const nextUserId=session?.user?.id||null;
+  if(!nextUserId)return;
+  if(authStateSyncTimer)clearTimeout(authStateSyncTimer);
+  authStateSyncTimer=setTimeout(async()=>{
+    authStateSyncTimer=null;
+    if(savedUser?.id===nextUserId)return;
+    try{
+      await bootstrapAuth();
+      render();
+    }catch(error){
+      console.error('Auth state refresh failed',error);
+      const staleChannels=resetAuthenticatedRuntime();
+      render();
+      cleanupAuthenticatedChannels(staleChannels).catch(cleanupError=>console.warn('Auth cleanup failed',cleanupError));
+    }
+  },80);
+}
+
+function handleAuthStateChange(event,session) {
+  if(event==='INITIAL_SESSION'||event==='TOKEN_REFRESHED')return;
+  const nextUserId=session?.user?.id||null;
+  if(event==='SIGNED_OUT'||!nextUserId){
+    if(authStateSyncTimer){clearTimeout(authStateSyncTimer);authStateSyncTimer=null;}
+    const staleChannels=resetAuthenticatedRuntime();
+    render();
+    setTimeout(()=>cleanupAuthenticatedChannels(staleChannels).catch(error=>console.warn('Auth channel cleanup failed',error)),0);
+    return;
+  }
+  if(event==='SIGNED_IN'){
+    if(savedUser?.id===nextUserId)return;
+    const staleChannels=savedUser?.id&&savedUser.id!==nextUserId?resetAuthenticatedRuntime():[];
+    if(staleChannels.length)setTimeout(()=>cleanupAuthenticatedChannels(staleChannels).catch(error=>console.warn('Auth account-switch cleanup failed',error)),0);
+    scheduleAuthStateRefresh(session);
+  }
+}
 
 async function bootstrapAuth() {
   if (!supabase) {
@@ -1194,5 +1299,7 @@ function render() {
     await syncServerMembers(user,selected);
   }));
 }
-bootstrapAuth().then(render).catch(error=>{console.error('Vessel bootstrap failed',error);savedUser=null;render();});
+const authStateSubscription=supabase?.auth.onAuthStateChange((event,session)=>handleAuthStateChange(event,session)).data?.subscription||null;
+window.addEventListener('beforeunload',()=>authStateSubscription?.unsubscribe());
+bootstrapAuth().then(render).catch(error=>{console.error('Vessel bootstrap failed',error);const staleChannels=resetAuthenticatedRuntime();render();cleanupAuthenticatedChannels(staleChannels).catch(()=>{});});
 setInterval(()=>{const video=document.querySelector('#local-video');const stream=callStream||voiceStream;if(video&&stream&&video.srcObject!==stream){video.srcObject=stream;video.play().catch(()=>{});}const remote=document.querySelector('#remote-video');if(remote&&remoteCallStream&&remote.srcObject!==remoteCallStream){remote.srcObject=remoteCallStream;remote.play().catch(()=>{});}},500);
