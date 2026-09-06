@@ -4,6 +4,22 @@ path = Path('src/main.js')
 text = path.read_text(encoding='utf-8')
 changed = False
 
+NOTIFICATION_MARKERS = [
+    'let notificationsSyncRevision = 0;',
+    'const revision=++notificationsSyncRevision;',
+    'if(savedUser?.id!==user.id||revision!==notificationsSyncRevision)return;',
+    'window.__vesselNotificationsLoaded=false;',
+    'notificationsSyncRevision++;',
+    "notifications=[row,...notifications.filter(item=>item.id!==row.id)];",
+]
+
+# Later lifecycle patches may insert their own revision counters between these lines.
+# Once all observable notification hardening markers exist, treat the migration as
+# complete instead of requiring the original contiguous reset anchor forever.
+if all(marker in text for marker in NOTIFICATION_MARKERS):
+    print('Notification session and Realtime race hardening already applied; nothing to change')
+    raise SystemExit(0)
+
 
 def replace_once(old, new, label):
     global text, changed
@@ -78,14 +94,7 @@ replace_once(
     'notification realtime revision guard',
 )
 
-for marker in [
-    'let notificationsSyncRevision = 0;',
-    'const revision=++notificationsSyncRevision;',
-    'if(savedUser?.id!==user.id||revision!==notificationsSyncRevision)return;',
-    'window.__vesselNotificationsLoaded=false;',
-    'notificationsSyncRevision++;',
-    "notifications=[row,...notifications.filter(item=>item.id!==row.id)];",
-]:
+for marker in NOTIFICATION_MARKERS:
     if marker not in text:
         raise SystemExit(f'missing notification hardening marker: {marker}')
 
