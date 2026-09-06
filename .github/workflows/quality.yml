@@ -32,6 +32,8 @@ jobs:
         run: python scripts/server_context_smoke_check.py
       - name: Message auth context smoke check
         run: python scripts/message_auth_context_smoke_check.py
+      - name: Stale channel send smoke check
+        run: python scripts/channel_send_guard_smoke_check.py
       - name: JavaScript syntax check
         run: node --check src/main.js
       - name: Install locked dependencies
