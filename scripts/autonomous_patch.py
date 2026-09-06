@@ -2,12 +2,16 @@ from pathlib import Path
 
 path=Path('src/main.js')
 text=path.read_text(encoding='utf-8')
+changed=False
 
 def replace_once(old,new,label):
-    global text
+    global text, changed
     if old not in text:
+        if new in text:
+            return
         raise SystemExit(f'{label} anchor not found')
     text=text.replace(old,new,1)
+    changed=True
 
 # Server renames/icons and profile status/name changes should propagate to every authorized
 # open client instead of requiring a reload.
@@ -66,5 +70,8 @@ for required in ['vessel-profiles-${user.id}','vessel-servers-${user.id}',"error
     if required not in text:
         raise SystemExit(f'missing profile/server realtime hardening: {required}')
 
-path.write_text(text,encoding='utf-8')
-print('Applied realtime profile and server synchronization')
+if changed:
+    path.write_text(text,encoding='utf-8')
+    print('Applied realtime profile and server synchronization')
+else:
+    print('Realtime profile and server synchronization already applied; nothing to change')
