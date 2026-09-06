@@ -24,7 +24,12 @@ NOTIFICATION_READ_MARKERS = [
     'notifications=notifications.map(item=>updatedIds.has(item.id)&&!item.read_at?{...item,read_at:readAt}:item);',
 ]
 
-ALL_MARKERS = [*NOTIFICATION_MARKERS, *NOTIFICATION_READ_MARKERS]
+NOTIFICATION_REALTIME_READ_MARKERS = [
+    "event:'UPDATE',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`",
+    'notifications=notifications.map(item=>item.id===row.id?{...item,...row}:item);',
+]
+
+ALL_MARKERS = [*NOTIFICATION_MARKERS, *NOTIFICATION_READ_MARKERS, *NOTIFICATION_REALTIME_READ_MARKERS]
 
 if all(marker in text for marker in ALL_MARKERS):
     print('Notification session, Realtime, and read-state hardening already applied; nothing to change')
@@ -140,6 +145,36 @@ replace_once(
   });
 """,
     'notification read snapshot/session guard',
+)
+
+replace_once(
+    """    supabase.channel(`vessel-notifications-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{
+      const row=payload.new;
+      notificationsSyncRevision++;
+      window.__vesselNotificationsLoaded=true;
+      notifications=[row,...notifications.filter(item=>item.id!==row.id)];
+      render();
+    }).subscribe()
+""",
+    """    supabase.channel(`vessel-notifications-${user.id}`)
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{
+        const row=payload.new;
+        notificationsSyncRevision++;
+        window.__vesselNotificationsLoaded=true;
+        notifications=[row,...notifications.filter(item=>item.id!==row.id)];
+        render();
+      })
+      .on('postgres_changes',{event:'UPDATE',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{
+        const row=payload.new;
+        if(!row?.id)return;
+        notificationsSyncRevision++;
+        window.__vesselNotificationsLoaded=true;
+        notifications=notifications.map(item=>item.id===row.id?{...item,...row}:item);
+        render();
+      })
+      .subscribe()
+""",
+    'notification realtime read-state sync',
 )
 
 for marker in ALL_MARKERS:
