@@ -74,9 +74,11 @@ realtime_new = """    supabase.channel(`vessel-dm-${user.id}`).on('postgres_chan
     }).subscribe(),"""
 replace_once(realtime_old, realtime_new, 'dm thread realtime refresh')
 
-render_sync_old = "syncSocial(user); syncNotifications(user);"
-render_sync_new = "syncSocial(user); syncDmThreads(user); syncNotifications(user);"
-replace_once(render_sync_old, render_sync_new, 'dm thread render sync')
+replace_once(
+    "syncSocial(user); syncNotifications(user);",
+    "syncSocial(user); syncDmThreads(user); syncNotifications(user);",
+    'dm thread render sync'
+)
 
 dm_list_old = """  const dmList=friends.length
     ? friends.map(friend=>`<button class="channel dm ${activeDmId===friend.id?'active':''}" data-dm-id="${friend.id}" data-dm="${escapeHtml(friend.username)}"><div class="mini-avatar" style="background:${friend.avatar_color||'#8b7cff'}">${(friend.username||'?')[0].toUpperCase()}</div> ${escapeHtml(friend.username)} <em></em></button>`).join('')
@@ -96,6 +98,24 @@ attachment_new = """        window.__vesselDmThreadsLoaded=false;
         await Promise.all([loadDirectMessages(user,peerId),syncDmThreads(user)]);
       } else {"""
 replace_once(attachment_old, attachment_new, 'dm attachment thread refresh')
+
+# Old conversations remain readable after unfriend, but RLS correctly blocks new DMs.
+# Reflect that state in the UI instead of presenting actions that are guaranteed to fail.
+replace_once(
+    "  const callInProgress=Boolean(callConnection||callStream);\n  const activeServer=getActiveServer();",
+    "  const callInProgress=Boolean(callConnection||callStream);\n  const activeDmIsFriend=Boolean(activeDmId&&friends.some(friend=>friend.id===activeDmId));\n  const activeServer=getActiveServer();",
+    'dm friendship capability state'
+)
+replace_once(
+    "    : (!friendsOpen&&activeDmId) ? `<button id=\"audio-call\" title=\"Аудиозвонок\">📞</button><button id=\"video-call\" title=\"Видеозвонок\">🎥</button>` : '';",
+    "    : (!friendsOpen&&activeDmId&&activeDmIsFriend) ? `<button id=\"audio-call\" title=\"Аудиозвонок\">📞</button><button id=\"video-call\" title=\"Видеозвонок\">🎥</button>` : '';",
+    'dm call capability'
+)
+replace_once(
+    "        <form class=\"composer ${friendsOpen||(!currentDm&&activeChannelKind==='voice')?'hidden':''}\"><button type=\"button\" class=\"attach\">＋</button>",
+    "        ${activeDmId&&!activeDmIsFriend?'<div class=\"dm-empty\">История доступна только для чтения. Добавь пользователя в друзья, чтобы снова писать и звонить.</div>':''}<form class=\"composer ${friendsOpen||(!currentDm&&activeChannelKind==='voice')||(activeDmId&&!activeDmIsFriend)?'hidden':''}\"><button type=\"button\" class=\"attach\">＋</button>",
+    'read-only historical DM UI'
+)
 
 # Snapshot the safe, auth-scoped DM-thread RPC. It intentionally exposes no email address.
 rpc_marker = 'create or replace function public.vessel_dm_threads()'
@@ -130,7 +150,7 @@ grant execute on function public.vessel_dm_threads() to authenticated;
 """
     changed = True
 
-for marker in [friend_new, 'let dmThreads = [];', "supabase.rpc('vessel_dm_threads')", 'const dmList=dmThreads.length', rpc_marker, index_marker]:
+for marker in [friend_new, 'let dmThreads = [];', "supabase.rpc('vessel_dm_threads')", 'const dmList=dmThreads.length', 'activeDmIsFriend', 'История доступна только для чтения.', rpc_marker, index_marker]:
     source = schema if marker in (rpc_marker,index_marker) else text
     if marker not in source:
         raise SystemExit(f'missing expected Vessel marker after patch: {marker[:80]}')
@@ -138,6 +158,6 @@ for marker in [friend_new, 'let dmThreads = [];', "supabase.rpc('vessel_dm_threa
 if changed:
     main_path.write_text(text, encoding='utf-8')
     schema_path.write_text(schema, encoding='utf-8')
-    print('Applied Vessel DM-thread and friend-request hardening')
+    print('Applied Vessel DM history capability hardening')
 else:
-    print('Vessel DM-thread and friend-request hardening already applied; nothing to change')
+    print('Vessel DM history capability hardening already applied; nothing to change')
