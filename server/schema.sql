@@ -367,14 +367,19 @@ create policy "users can send friend requests" on public.friend_requests for ins
   and sender_id<>receiver_id
   and not exists(select 1 from public.friendships f where f.user_id=(select auth.uid()) and f.friend_id=friend_requests.receiver_id)
 );
-create policy "receivers can answer friend requests" on public.friend_requests for update to authenticated using(receiver_id=(select auth.uid())) with check(receiver_id=(select auth.uid()) and status in ('accepted','declined'));
-create policy "senders can retry terminal friend requests" on public.friend_requests for update to authenticated
-using(sender_id=(select auth.uid()) and status in ('accepted','declined','cancelled'))
+create policy "participants can update friend requests" on public.friend_requests for update to authenticated
+using(
+  receiver_id=(select auth.uid())
+  or (sender_id=(select auth.uid()) and status in ('accepted','declined','cancelled'))
+)
 with check(
-  sender_id=(select auth.uid())
-  and sender_id<>receiver_id
-  and status='pending'
-  and not exists(select 1 from public.friendships f where f.user_id=(select auth.uid()) and f.friend_id=friend_requests.receiver_id)
+  (receiver_id=(select auth.uid()) and status in ('accepted','declined'))
+  or (
+    sender_id=(select auth.uid())
+    and sender_id<>receiver_id
+    and status='pending'
+    and not exists(select 1 from public.friendships f where f.user_id=(select auth.uid()) and f.friend_id=friend_requests.receiver_id)
+  )
 );
 create policy "senders can cancel pending friend requests" on public.friend_requests for delete to authenticated
 using(sender_id=(select auth.uid()) and status='pending');
