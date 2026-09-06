@@ -122,6 +122,7 @@ async function syncSupabaseMessages() {
 async function loadChannelMessages(channelId) {
   if (!supabase || !channelId) return;
   const {data,error} = await supabase.from('messages').select('body,attachments,created_at,profiles(username,avatar_color)').eq('channel_id',channelId).order('created_at',{ascending:false}).limit(100);
+  if(activeDmId||activeChannelId!==channelId||activeChannelKind!=='text')return;
   if(error){vesselNotice('Не удалось загрузить сообщения канала.','error');return;}
   messages = (data||[]).reverse().map(m=>({name:m.profiles?.username||'Участник',time:new Date(m.created_at).toLocaleString('ru-RU'),color:m.profiles?.avatar_color||'#8b7cff',text:m.body,attachments:m.attachments||[]}));
   render();
@@ -255,6 +256,7 @@ async function syncNotifications(user) {
 async function loadDirectMessages(user, friendId) {
   if (!supabase || !user?.id || !friendId) return;
   const {data,error} = await supabase.from('direct_messages').select('id,sender_id,receiver_id,body,attachments,created_at,profiles!direct_messages_sender_id_fkey(username,avatar_color)').or(`and(sender_id.eq.${user.id},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${user.id})`).order('created_at',{ascending:false}).limit(100);
+  if(activeDmId!==friendId)return;
   if(error){vesselNotice('Не удалось загрузить личные сообщения.','error');return;}
   dmMessages = (data || []).reverse().map(row => ({name:row.profiles?.username || 'Пользователь',time:new Date(row.created_at).toLocaleString('ru-RU'),color:row.profiles?.avatar_color || '#8b7cff',text:row.body,attachments:row.attachments||[]}));
   render();
