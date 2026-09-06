@@ -28,7 +28,9 @@ required = [
     'async function bootstrapAuth()',
     'async function syncSocial(user)',
     'async function loadDirectMessages(user, friendId)',
-    'async function toggleVoiceRoom(user)',
+    'async function toggleVoiceRoom(user,reconnecting=false)',
+    'function scheduleVoiceReconnect(user,channelId,serverId)',
+    'function cancelVoiceReconnect()',
     'async function endCall(notify=true)',
     "supabase.functions.invoke('search-user'",
     "supabase.functions.invoke('join-server'",
@@ -60,6 +62,8 @@ required = [
     'const openFriendsHome=()=>{friendsOpen=true;currentDm=null;activeDmId=null;',
     "if(callConnection||callStream||incomingCall){vesselNotice('Заверши личный звонок",
     'VOICE_REALTIME_TIMEOUT',
+    'scheduleVoiceReconnect(user,failedChannelId,failedServerId);',
+    "vesselNotice('Голосовая связь восстановлена.','success');",
     "activeChannelKind!=='text'",
     'maxlength="32"',
     'const selected=getActiveServer();',
@@ -93,11 +97,17 @@ if friends_start < 0 or 'activeDmId=null;' not in main[friends_start:friends_sta
     raise SystemExit('Friends home must clear active DM state')
 
 # Voice and direct calls share microphone resources and must be mutually exclusive.
-voice_start=main.find('async function toggleVoiceRoom(user)')
-voice_block=main[voice_start:voice_start+3500]
+voice_start=main.find('async function toggleVoiceRoom(user,reconnecting=false)')
+if voice_start < 0:
+    raise SystemExit('Missing reconnect-aware voice room entry point')
+voice_block=main[voice_start:voice_start+5200]
 if "callConnection||callStream||incomingCall" not in voice_block:
     raise SystemExit('Voice room entry must refuse while a direct call is active or incoming')
 if "['CHANNEL_ERROR','TIMED_OUT','CLOSED']" not in voice_block:
-    raise SystemExit('Voice room must clean up failed Realtime subscriptions')
+    raise SystemExit('Voice room must handle failed Realtime subscriptions')
+if 'scheduleVoiceReconnect(user,failedChannelId,failedServerId);' not in voice_block:
+    raise SystemExit('Voice room must schedule recovery after an established Realtime channel fails')
+if 'voiceStream?.getTracks().forEach(track=>track.stop());voiceStream=null;' not in voice_block:
+    raise SystemExit('Voice room recovery must release the failed microphone stream before reconnecting')
 
 print('Vessel authenticated runtime smoke check passed')
