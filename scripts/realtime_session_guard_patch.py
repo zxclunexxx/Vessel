@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Idempotent hardening for stale Realtime callbacks after auth account switches.
 path = Path('src/main.js')
 text = path.read_text(encoding='utf-8')
 changed = False
