@@ -23,6 +23,7 @@ on:
       - 'scripts/dm_send_guard_patch.py'
       - 'scripts/server_sync_patch.py'
       - 'scripts/call_access_race_patch.py'
+      - 'scripts/media_context_patch.py'
 
 permissions:
   contents: write
@@ -61,6 +62,7 @@ jobs:
           if [ -f scripts/dm_send_guard_patch.py ]; then python scripts/dm_send_guard_patch.py; fi
           if [ -f scripts/server_sync_patch.py ]; then python scripts/server_sync_patch.py; fi
           if [ -f scripts/call_access_race_patch.py ]; then python scripts/call_access_race_patch.py; fi
+          if [ -f scripts/media_context_patch.py ]; then python scripts/media_context_patch.py; fi
       - name: Check JavaScript syntax
         run: node --check src/main.js
       - name: Install locked dependencies
