@@ -881,14 +881,16 @@ function connectSupabaseRealtime(user) {
   if (!supabase || !user?.id || window.__vesselRealtimeChannels) return;
   window.__vesselRealtimeChannels = [
     supabase.channel(`vessel-dm-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'direct_messages'},payload=>{
+      if(savedUser?.id!==user.id)return;
       const row=payload.new;
       window.__vesselDmThreadsLoaded=false;
       syncDmThreads(user).catch(error=>console.warn('DM thread realtime refresh failed',error));
       if(activeDmId && (row.sender_id===activeDmId || row.receiver_id===activeDmId)){ window.__vesselDmLoaded=false; loadDirectMessages(user,activeDmId); }
     }).subscribe(),
-    supabase.channel(`vessel-friends-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friend_requests',filter:`receiver_id=eq.${user.id}`},()=>{window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),
-    supabase.channel(`vessel-friend-requests-out-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friend_requests',filter:`sender_id=eq.${user.id}`},()=>{window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),
+    supabase.channel(`vessel-friends-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friend_requests',filter:`receiver_id=eq.${user.id}`},()=>{if(savedUser?.id!==user.id)return;window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),
+    supabase.channel(`vessel-friend-requests-out-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friend_requests',filter:`sender_id=eq.${user.id}`},()=>{if(savedUser?.id!==user.id)return;window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),
     supabase.channel(`vessel-friendships-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friendships',filter:`user_id=eq.${user.id}`},async payload=>{
+      if(savedUser?.id!==user.id)return;
       const row=payload.new?.friend_id?payload.new:payload.old;
       if(payload.eventType==='DELETE'&&row?.friend_id){
         if(incomingCall?.from===row.friend_id){incomingCall=null;render();}
@@ -898,6 +900,7 @@ function connectSupabaseRealtime(user) {
       syncSocial(user);
     }).subscribe(),
     supabase.channel(`vessel-memberships-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'server_members'},async payload=>{
+      if(savedUser?.id!==user.id)return;
       const row=payload.new?.server_id?payload.new:payload.old;
       if(!row)return;
       if(row.user_id===user.id){
@@ -914,15 +917,18 @@ function connectSupabaseRealtime(user) {
       }
     }).subscribe(),
     supabase.channel(`vessel-channels-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'channels'},async payload=>{
+      if(savedUser?.id!==user.id)return;
       const row=payload.new?.server_id?payload.new:payload.old;
       if(payload.eventType==='DELETE'&&voiceStream&&row?.id===voiceChannelId)await leaveVoiceRoom();
       const active=getActiveServer();
       if(row?.server_id&&active?.dbId===row.server_id){active.__channelsLoaded=false;syncSupabaseChannels(active);}
     }).subscribe(),
     supabase.channel(`vessel-channel-messages-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},payload=>{
+      if(savedUser?.id!==user.id)return;
       if(payload.new.channel_id===activeChannelId && payload.new.author_id!==user.id)loadChannelMessages(activeChannelId).catch(error=>console.warn('Message refresh failed',error));
     }).subscribe(),
     supabase.channel(`vessel-profiles-${user.id}`).on('postgres_changes',{event:'UPDATE',schema:'public',table:'profiles'},payload=>{
+      if(savedUser?.id!==user.id)return;
       const row=payload.new;
       if(!row?.id)return;
       let dirty=false;
@@ -934,6 +940,7 @@ function connectSupabaseRealtime(user) {
       if(dirty)render();
     }).subscribe(),
     supabase.channel(`vessel-servers-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'servers'},async payload=>{
+      if(savedUser?.id!==user.id)return;
       const row=payload.new?.id?payload.new:payload.old;
       if(!row?.id)return;
       if(payload.eventType==='DELETE'){
@@ -952,6 +959,7 @@ function connectSupabaseRealtime(user) {
     }).subscribe(),
     supabase.channel(`vessel-notifications-${user.id}`)
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{
+        if(savedUser?.id!==user.id)return;
         const row=payload.new;
         notificationsSyncRevision++;
         window.__vesselNotificationsLoaded=true;
@@ -959,6 +967,7 @@ function connectSupabaseRealtime(user) {
         render();
       })
       .on('postgres_changes',{event:'UPDATE',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{
+        if(savedUser?.id!==user.id)return;
         const row=payload.new;
         if(!row?.id)return;
         notificationsSyncRevision++;
