@@ -85,12 +85,9 @@ for item in required:
     if item not in main:
         raise SystemExit(f'Missing expected runtime feature: {item}')
 
-# Keep the authenticated UI backed by database identities, not fake fallback people.
 if "savedUser = JSON.parse(localStorage.getItem('vesselUser')" in main:
     raise SystemExit('Runtime must not trust a cached localStorage user as an authenticated session')
 
-# Channel and DM state are mutually exclusive. The channel click handler must clear the DM id
-# before changing activeChannelId, otherwise channel messages can be sent to an old DM.
 channel_handler_start = main.find("document.querySelectorAll('.channel:not(.dm)')")
 if channel_handler_start < 0:
     raise SystemExit('Missing server-channel click handler')
@@ -100,16 +97,13 @@ if 'activeDmId=null;' not in channel_handler or 'activeChannelId=channelId;' not
 if channel_handler.find('activeDmId=null;') > channel_handler.find('activeChannelId=channelId;'):
     raise SystemExit('Channel handler must clear DM state before selecting a channel')
 
-# Stable database ids, not array positions, must be the persisted server identity.
 if "let activeServerId = localStorage.getItem('vesselActiveServerId')" not in main:
     raise SystemExit('Active server must be persisted by stable database id')
 
-# The Friends home state must not keep a stale direct-message id alive.
 friends_start=main.find('const openFriendsHome=')
 if friends_start < 0 or 'activeDmId=null;' not in main[friends_start:friends_start+300]:
     raise SystemExit('Friends home must clear active DM state')
 
-# Voice and direct calls share microphone resources and must be mutually exclusive.
 voice_start=main.find('async function toggleVoiceRoom(user,reconnecting=false)')
 if voice_start < 0:
     raise SystemExit('Missing reconnect-aware voice room entry point')
@@ -123,8 +117,6 @@ if 'scheduleVoiceReconnect(user,failedChannelId,failedServerId);' not in voice_b
 if 'voiceStream?.getTracks().forEach(track=>track.stop());voiceStream=null;' not in voice_block:
     raise SystemExit('Voice room recovery must release the failed microphone stream before reconnecting')
 
-# Established call inbox/signaling channels must recover after Realtime churn without
-# requiring a page reload or tearing down a healthy WebRTC media connection.
 subscribe_start=main.find('function subscribeChannel(channel,onDisconnect=null)')
 if subscribe_start < 0:
     raise SystemExit('Missing established Realtime disconnect callback')
@@ -145,9 +137,9 @@ if 'ensureCallChannel(savedUser,peerId)' not in call_block or 'Call signaling re
     raise SystemExit('Active call signaling must resubscribe after an established Realtime disconnect')
 if 'callConnection&&!callChannel' not in call_block:
     raise SystemExit('Call signaling reconnect must be scoped to an active WebRTC call')
+if 'if(callInboxChannel!==inbox||savedUser?.id!==user.id)return;' not in inbox_block:
+    raise SystemExit('Incoming call invite lookup must be discarded after inbox/session changes')
 
-# Slow responses from a previously selected channel/DM must never overwrite the conversation
-# currently on screen. These guards execute immediately after each async message query returns.
 channel_load_start=main.find('async function loadChannelMessages(channelId)')
 dm_load_start=main.find('async function loadDirectMessages(user, friendId)')
 if channel_load_start < 0 or dm_load_start < 0:
@@ -159,7 +151,6 @@ if "if(activeDmId||activeChannelId!==channelId||activeChannelKind!=='text')retur
 if 'if(activeDmId!==friendId)return;' not in dm_load:
     raise SystemExit('Direct-message loader must discard stale async responses')
 
-# Multi-request state loaders must publish only the newest response for the current session.
 servers_start=main.find('async function syncSupabaseServers(user)')
 social_start=main.find('async function syncSocial(user)')
 threads_start=main.find('async function syncDmThreads(user)')
@@ -179,7 +170,6 @@ if 'revision!==dmThreadsSyncRevision' not in threads_block:
 if 'revision!==notificationsSyncRevision' not in notifications_block:
     raise SystemExit('Notification sync must reject stale session/revision responses')
 
-# Resetting authenticated runtime must invalidate every outstanding state fetch.
 reset_start=main.find('function resetAuthenticatedRuntime()')
 if reset_start < 0:
     raise SystemExit('Missing authenticated runtime reset')
@@ -188,7 +178,6 @@ for marker in ['serversSyncRevision++;','socialSyncRevision++;','dmThreadsSyncRe
     if marker not in reset_block:
         raise SystemExit(f'Authenticated reset does not invalidate async state: {marker}')
 
-# A DM can remain visible after unfriend, but sending must re-check the friendship in the DB.
 composer_start=main.find("document.querySelector('.composer').addEventListener('submit'")
 if composer_start < 0:
     raise SystemExit('Missing message composer submit handler')
@@ -197,5 +186,22 @@ if 'verifyDirectMessageAccess(user,peerId)' not in composer_block:
     raise SystemExit('DM send must verify current friendship before insert')
 if 'verifyDirectMessageAccess(user,peerId,{notify:false})' not in composer_block:
     raise SystemExit('Failed DM inserts must re-check friendship before surfacing a generic error')
+
+# Friendship can change after a call button or incoming invite is rendered. Re-check access
+# immediately before media/call state is created and discard async results from stale UI/session state.
+start_call_start=main.find('async function startCall(video,user)')
+accept_call_start=main.find('async function acceptIncomingCall(user)')
+if start_call_start < 0 or accept_call_start < 0:
+    raise SystemExit('Missing direct call entry points')
+start_call_block=main[start_call_start:accept_call_start]
+accept_call_block=main[accept_call_start:accept_call_start+2200]
+if 'if((await verifyDirectMessageAccess(user,peerId))!==true)return;' not in start_call_block:
+    raise SystemExit('Outgoing call must re-check friendship before acquiring media')
+if start_call_block.count('if(savedUser?.id!==user.id||activeDmId!==peerId)return;') < 2:
+    raise SystemExit('Outgoing call must stay bound to the initiating session and DM across awaits')
+if 'const access=await verifyDirectMessageAccess(user,invite.from);' not in accept_call_block:
+    raise SystemExit('Incoming call acceptance must re-check friendship before acquiring media')
+if 'if(incomingCall!==invite||savedUser?.id!==user.id)return;' not in accept_call_block:
+    raise SystemExit('Incoming call acceptance must discard stale invite/session results')
 
 print('Vessel authenticated runtime smoke check passed')
