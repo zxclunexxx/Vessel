@@ -4,7 +4,7 @@
 drop policy if exists "receivers can answer friend requests" on public.friend_requests;
 drop policy if exists "senders can retry terminal friend requests" on public.friend_requests;
 
-create policy "participants can update friend request state"
+create policy "participants can update friend requests"
 on public.friend_requests
 for update
 to authenticated
