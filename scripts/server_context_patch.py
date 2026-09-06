@@ -64,17 +64,20 @@ replace_once(
 )
 
 # Older server-context migration: suppress an error toast when the user already moved
-# to another server. The newer auth/object guard above subsumes its active-server marker.
-replace_once(
-    """  const {data,error}=await supabase.from('channels').select('id,name,kind,position').eq('server_id',server.dbId).order('position');
+# to another server. The stronger auth/object guard above already contains that behavior.
+if "const serverStillActive=Boolean(savedUser?.id===sessionUserId&&server===activeServer&&serverId===activeServer?.dbId);" in text:
+    print('stale channel error suppression: superseded by auth/object guard')
+else:
+    replace_once(
+        """  const {data,error}=await supabase.from('channels').select('id,name,kind,position').eq('server_id',server.dbId).order('position');
   if(error){console.warn('Channel sync failed',error);vesselNotice('Не удалось загрузить каналы сервера.','error');return;}
 """,
-    """  const {data,error}=await supabase.from('channels').select('id,name,kind,position').eq('server_id',server.dbId).order('position');
+        """  const {data,error}=await supabase.from('channels').select('id,name,kind,position').eq('server_id',server.dbId).order('position');
   const serverStillActive=server.id===getActiveServer()?.id;
   if(error){console.warn('Channel sync failed',error);if(serverStillActive)vesselNotice('Не удалось загрузить каналы сервера.','error');return;}
 """,
-    'stale channel error suppression',
-)
+        'stale channel error suppression',
+    )
 
 replace_once(
     """  const {data: memberships, error} = await supabase.from('server_members').select('user_id,role').eq('server_id',server.dbId);
@@ -99,7 +102,6 @@ replace_once(
 )
 
 required_markers = [
-    'const sessionUserId=savedUser?.id||null;',
     "if(savedUser?.id!==sessionUserId||activeDmId||activeChannelId!==channelId||activeChannelKind!=='text')return;",
     'const serverId=server.dbId;',
     'const serverStillActive=Boolean(savedUser?.id===sessionUserId&&server===activeServer&&serverId===activeServer?.dbId);',
@@ -110,6 +112,8 @@ for marker in required_markers:
     if marker not in text:
         raise SystemExit(f'missing server/channel context marker: {marker}')
 
+if text.count('const sessionUserId=savedUser?.id||null;') < 2:
+    raise SystemExit('missing channel/message auth-session capture guards')
 if text.count('if(savedUser?.id!==user.id||server.dbId!==getActiveServer()?.dbId)return;') < 2:
     raise SystemExit('missing one of the server member async context guards')
 
