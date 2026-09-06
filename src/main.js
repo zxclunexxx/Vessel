@@ -149,7 +149,8 @@ async function syncSupabaseServers(user) {
 async function syncSupabaseChannels(server) {
   if (!supabase || !server?.dbId || server.__channelsLoaded) return;
   const {data,error}=await supabase.from('channels').select('id,name,kind,position').eq('server_id',server.dbId).order('position');
-  if(error){console.warn('Channel sync failed',error);vesselNotice('Не удалось загрузить каналы сервера.','error');return;}
+  const serverStillActive=server.id===getActiveServer()?.id;
+  if(error){console.warn('Channel sync failed',error);if(serverStillActive)vesselNotice('Не удалось загрузить каналы сервера.','error');return;}
   const rows=data||[];
   server.channels=rows;
   server.__channelsLoaded=true;
@@ -170,11 +171,13 @@ async function syncServerMembers(user, server) {
   if (!supabase || !user?.id || !server?.dbId) { serverMembers=[]; return; }
   if (window.__vesselMembersServerId === server.dbId) return;
   const {data: memberships, error} = await supabase.from('server_members').select('user_id,role').eq('server_id',server.dbId);
+  if(savedUser?.id!==user.id||server.dbId!==getActiveServer()?.dbId)return;
   if (error) { console.warn('Server members failed', error); serverMembers=[]; return; }
   const ids=(memberships||[]).map(row=>row.user_id).filter(Boolean);
   let profiles=[];
   if(ids.length){
     const result=await supabase.from('profiles').select('id,username,avatar_color,status').in('id',ids);
+    if(savedUser?.id!==user.id||server.dbId!==getActiveServer()?.dbId)return;
     if(result.error){console.warn('Member profiles failed',result.error);vesselNotice('Не удалось загрузить профили участников.','error');return;}
     profiles=result.data||[];
   }
