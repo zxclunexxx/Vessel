@@ -19,6 +19,7 @@ banned = [
     "localStorage.setItem('vesselActiveServer',",
     "savedUser || JSON.parse(localStorage.getItem('vesselUser')",
     "const selected=servers[activeServerIndex];",
+    "if(voiceStream && voiceChannelId!==activeChannelId){await leaveVoiceRoom();}",
 ]
 found = [item for item in banned if item in main]
 if found:
@@ -32,6 +33,7 @@ required = [
     'function scheduleVoiceReconnect(user,channelId,serverId)',
     'function cancelVoiceReconnect()',
     'async function endCall(notify=true)',
+    'function subscribeChannel(channel,onDisconnect=null)',
     "supabase.functions.invoke('search-user'",
     "supabase.functions.invoke('join-server'",
     'function vesselDialog(',
@@ -64,6 +66,10 @@ required = [
     'VOICE_REALTIME_TIMEOUT',
     'scheduleVoiceReconnect(user,failedChannelId,failedServerId);',
     "vesselNotice('Голосовая связь восстановлена.','success');",
+    'Call inbox ${status}; reconnecting',
+    'Call signaling ${status}; reconnecting',
+    'Call inbox reconnect failed',
+    'Call signaling reconnect failed',
     "activeChannelKind!=='text'",
     'maxlength="32"',
     'const selected=getActiveServer();',
@@ -109,5 +115,28 @@ if 'scheduleVoiceReconnect(user,failedChannelId,failedServerId);' not in voice_b
     raise SystemExit('Voice room must schedule recovery after an established Realtime channel fails')
 if 'voiceStream?.getTracks().forEach(track=>track.stop());voiceStream=null;' not in voice_block:
     raise SystemExit('Voice room recovery must release the failed microphone stream before reconnecting')
+
+# Established call inbox/signaling channels must recover after Realtime churn without
+# requiring a page reload or tearing down a healthy WebRTC media connection.
+subscribe_start=main.find('function subscribeChannel(channel,onDisconnect=null)')
+if subscribe_start < 0:
+    raise SystemExit('Missing established Realtime disconnect callback')
+subscribe_block=main[subscribe_start:subscribe_start+2200]
+for marker in ['everSubscribed', 'disconnectNotified', "typeof onDisconnect === 'function'"]:
+    if marker not in subscribe_block:
+        raise SystemExit(f'Realtime subscription helper missing disconnect recovery marker: {marker}')
+
+inbox_start=main.find('async function ensureCallInbox(user)')
+channel_start=main.find('async function ensureCallChannel(user, peerId)')
+if inbox_start < 0 or channel_start < 0:
+    raise SystemExit('Missing call Realtime channel setup')
+inbox_block=main[inbox_start:channel_start]
+call_block=main[channel_start:channel_start+3200]
+if 'ensureCallInbox(savedUser)' not in inbox_block or 'Call inbox reconnect failed' not in inbox_block:
+    raise SystemExit('Call inbox must resubscribe after an established Realtime disconnect')
+if 'ensureCallChannel(savedUser,peerId)' not in call_block or 'Call signaling reconnect failed' not in call_block:
+    raise SystemExit('Active call signaling must resubscribe after an established Realtime disconnect')
+if 'callConnection&&!callChannel' not in call_block:
+    raise SystemExit('Call signaling reconnect must be scoped to an active WebRTC call')
 
 print('Vessel authenticated runtime smoke check passed')
