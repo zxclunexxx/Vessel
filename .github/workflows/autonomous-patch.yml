@@ -11,6 +11,7 @@ on:
       - 'scripts/call_security_patch.py'
       - 'scripts/profile_privacy_patch.py'
       - 'scripts/dm_thread_security_patch.py'
+      - 'scripts/friend_request_policy_patch.py'
 
 permissions:
   contents: write
@@ -37,6 +38,7 @@ jobs:
           if [ -f scripts/call_security_patch.py ]; then python scripts/call_security_patch.py; fi
           if [ -f scripts/profile_privacy_patch.py ]; then python scripts/profile_privacy_patch.py; fi
           if [ -f scripts/dm_thread_security_patch.py ]; then python scripts/dm_thread_security_patch.py; fi
+          if [ -f scripts/friend_request_policy_patch.py ]; then python scripts/friend_request_policy_patch.py; fi
       - name: Check JavaScript syntax
         run: node --check src/main.js
       - name: Install dependencies
