@@ -1329,10 +1329,15 @@ function render() {
   });
   document.querySelector('#notifications').addEventListener('click', async () => {
     vesselListDialog('Уведомления',notifications.map(item=>({title:item.title||'Vessel',body:item.body||'',meta:item.created_at?new Date(item.created_at).toLocaleString('ru-RU'):''})), 'Уведомлений пока нет');
-    const unread=notifications.filter(item=>!item.read_at);
-    if(unread.length&&supabase&&user.id){
-      await supabase.from('notifications').update({read_at:new Date().toISOString()}).eq('user_id',user.id).is('read_at',null);
-      notifications=notifications.map(item=>({...item,read_at:item.read_at||new Date().toISOString()}));
+    const sessionUserId=user.id;
+    const unreadIds=notifications.filter(item=>!item.read_at).map(item=>item.id).filter(Boolean);
+    if(unreadIds.length&&supabase&&sessionUserId){
+      const readAt=new Date().toISOString();
+      const {data:updated,error}=await supabase.from('notifications').update({read_at:readAt}).eq('user_id',sessionUserId).in('id',unreadIds).is('read_at',null).select('id');
+      if(savedUser?.id!==sessionUserId)return;
+      if(error){console.warn('Notification read update failed',error);vesselNotice('Не удалось отметить уведомления прочитанными.','error');return;}
+      const updatedIds=new Set((updated||[]).map(row=>row.id));
+      notifications=notifications.map(item=>updatedIds.has(item.id)&&!item.read_at?{...item,read_at:readAt}:item);
       render();
     }
   });
