@@ -1,0 +1,47 @@
+name: Persist Electron 44 lockfile
+
+on:
+  push:
+    branches: [test/electron-44]
+    paths:
+      - '.github/workflows/pin-electron44-lock.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  pin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Generate candidate lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Verify full dependency audit
+        run: npm audit --audit-level=high
+      - name: Verify production build
+        run: |
+          ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci
+          npm run build
+      - name: Commit candidate lockfile
+        run: |
+          if [ -z "$(git status --porcelain -- package-lock.json)" ]; then
+            echo "Electron 44 lockfile already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "test: pin Electron 44 dependency graph"
+          for attempt in 1 2 3; do
+            if git push; then exit 0; fi
+            git fetch origin test/electron-44
+            git rebase origin/test/electron-44
+          done
+          exit 1
