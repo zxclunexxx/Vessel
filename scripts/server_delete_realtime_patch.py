@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Applied by the autonomous patch workflow; deliberately idempotent.
 path = Path('src/main.js')
 text = path.read_text(encoding='utf-8')
 
