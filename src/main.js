@@ -38,7 +38,9 @@ let currentDm = null;
 let activeDmId = null;
 let friendsOpen = false;
 let friends = [];
+let socialSyncRevision = 0;
 let dmThreads = [];
+let dmThreadsSyncRevision = 0;
 let friendRequests = [];
 let outgoingFriendRequests = [];
 let dmMessages = [];
@@ -224,20 +226,25 @@ async function findAndRequestFriend(user) {
 
 async function syncSocial(user) {
   if (!supabase || !user?.id || window.__vesselSocialLoaded) return;
+  const revision=++socialSyncRevision;
   const {data: links, error: linksError} = await supabase.from('friendships').select('friend_id').eq('user_id', user.id);
+  if(savedUser?.id!==user.id||revision!==socialSyncRevision)return;
   if(linksError){vesselNotice('Не удалось загрузить список друзей.','error');return;}
   const ids = (links || []).map(row => row.friend_id).filter(Boolean);
-  friends = [];
+  let nextFriends = [];
   if (ids.length) {
     const {data: profiles, error: profilesError} = await supabase.from('profiles').select('id,username,avatar_color,status').in('id', ids);
+    if(savedUser?.id!==user.id||revision!==socialSyncRevision)return;
     if(profilesError){vesselNotice('Не удалось загрузить профили друзей.','error');return;}
-    friends = profiles || [];
+    nextFriends = profiles || [];
   }
   const [incomingResult,outgoingResult]=await Promise.all([
     supabase.from('friend_requests').select('id,sender_id,status,created_at,profiles!friend_requests_sender_id_fkey(username,avatar_color)').eq('receiver_id', user.id).eq('status','pending').order('created_at',{ascending:false}),
     supabase.from('friend_requests').select('id,receiver_id,status,created_at,profiles!friend_requests_receiver_id_fkey(username,avatar_color)').eq('sender_id', user.id).eq('status','pending').order('created_at',{ascending:false})
   ]);
+  if(savedUser?.id!==user.id||revision!==socialSyncRevision)return;
   if(incomingResult.error||outgoingResult.error){vesselNotice('Не удалось загрузить заявки в друзья.','error');return;}
+  friends = nextFriends;
   friendRequests = incomingResult.data || [];
   outgoingFriendRequests = outgoingResult.data || [];
   window.__vesselSocialLoaded = true;
@@ -245,7 +252,9 @@ async function syncSocial(user) {
 }
 async function syncDmThreads(user) {
   if (!supabase || !user?.id || window.__vesselDmThreadsLoaded) return;
+  const revision=++dmThreadsSyncRevision;
   const {data,error}=await supabase.rpc('vessel_dm_threads');
+  if(savedUser?.id!==user.id||revision!==dmThreadsSyncRevision)return;
   if(error){console.warn('DM thread sync failed',error);vesselNotice('Не удалось загрузить список личных чатов.','error');return;}
   dmThreads=(data||[]).map(row=>({id:row.peer_id,username:row.username||'Пользователь',avatar_color:row.avatar_color||'#8b7cff',status:row.status||'online',last_message_at:row.last_message_at}));
   window.__vesselDmThreadsLoaded=true;
@@ -939,7 +948,9 @@ function resetAuthenticatedRuntime() {
   window.__vesselDbLoaded=false;
   window.__vesselServersLoaded=false;
   window.__vesselSocialLoaded=false;
+  socialSyncRevision++;
   window.__vesselDmThreadsLoaded=false;
+  dmThreadsSyncRevision++;
   window.__vesselDmLoaded=false;
   window.__vesselNotificationsLoaded=false;
   notificationsSyncRevision++;
