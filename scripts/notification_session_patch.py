@@ -26,9 +26,6 @@ NOTIFICATION_READ_MARKERS = [
 
 ALL_MARKERS = [*NOTIFICATION_MARKERS, *NOTIFICATION_READ_MARKERS]
 
-# Later lifecycle patches may insert their own revision counters between these lines.
-# Once all observable notification hardening markers exist, treat the migration as
-# complete instead of requiring the original contiguous reset anchor forever.
 if all(marker in text for marker in ALL_MARKERS):
     print('Notification session, Realtime, and read-state hardening already applied; nothing to change')
     raise SystemExit(0)
@@ -45,28 +42,37 @@ def replace_once(old, new, label):
     changed = True
 
 
-replace_once(
-    """let dmMessages = [];
+# The original session/Realtime migration may already be present while later
+# lifecycle patches have changed the surrounding source. In that state, do not
+# re-run anchor-based replacements: their exact old/new blocks are intentionally
+# no longer guaranteed to remain contiguous.
+base_hardening_applied = all(marker in text for marker in NOTIFICATION_MARKERS)
+
+if base_hardening_applied:
+    print('Notification session and Realtime hardening already applied')
+else:
+    replace_once(
+        """let dmMessages = [];
 let notifications = [];
 let serverMembers = [];
 """,
-    """let dmMessages = [];
+        """let dmMessages = [];
 let notifications = [];
 let notificationsSyncRevision = 0;
 let serverMembers = [];
 """,
-    'notification revision state',
-)
+        'notification revision state',
+    )
 
-replace_once(
-    """async function syncNotifications(user) {
+    replace_once(
+        """async function syncNotifications(user) {
   if (!supabase || !user?.id || window.__vesselNotificationsLoaded) return;
   const {data}=await supabase.from('notifications').select('id,type,title,body,data,read_at,created_at').eq('user_id',user.id).order('created_at',{ascending:false}).limit(30);
   notifications=data||[]; window.__vesselNotificationsLoaded=true;
   if (document.querySelector('#app')) render();
 }
 """,
-    """async function syncNotifications(user) {
+        """async function syncNotifications(user) {
   if (!supabase || !user?.id || window.__vesselNotificationsLoaded) return;
   const revision=++notificationsSyncRevision;
   const {data,error}=await supabase.from('notifications').select('id,type,title,body,data,read_at,created_at').eq('user_id',user.id).order('created_at',{ascending:false}).limit(30);
@@ -76,27 +82,27 @@ replace_once(
   if (document.querySelector('#app')) render();
 }
 """,
-    'notification fetch session/revision guard',
-)
+        'notification fetch session/revision guard',
+    )
 
-replace_once(
-    """  window.__vesselDmThreadsLoaded=false;
+    replace_once(
+        """  window.__vesselDmThreadsLoaded=false;
   window.__vesselDmLoaded=false;
   window.__vesselMembersServerId=null;
 """,
-    """  window.__vesselDmThreadsLoaded=false;
+        """  window.__vesselDmThreadsLoaded=false;
   window.__vesselDmLoaded=false;
   window.__vesselNotificationsLoaded=false;
   notificationsSyncRevision++;
   window.__vesselMembersServerId=null;
 """,
-    'notification reset lifecycle',
-)
+        'notification reset lifecycle',
+    )
 
-replace_once(
-    """    supabase.channel(`vessel-notifications-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{notifications=[payload.new,...notifications];render();}).subscribe()
+    replace_once(
+        """    supabase.channel(`vessel-notifications-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{notifications=[payload.new,...notifications];render();}).subscribe()
 """,
-    """    supabase.channel(`vessel-notifications-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{
+        """    supabase.channel(`vessel-notifications-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{
       const row=payload.new;
       notificationsSyncRevision++;
       window.__vesselNotificationsLoaded=true;
@@ -104,8 +110,8 @@ replace_once(
       render();
     }).subscribe()
 """,
-    'notification realtime revision guard',
-)
+        'notification realtime revision guard',
+    )
 
 replace_once(
     """  document.querySelector('#notifications').addEventListener('click', async () => {
