@@ -43,6 +43,7 @@ let friendRequests = [];
 let outgoingFriendRequests = [];
 let dmMessages = [];
 let notifications = [];
+let notificationsSyncRevision = 0;
 let serverMembers = [];
 function escapeHtml(value='') {
   return String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -252,7 +253,10 @@ async function syncDmThreads(user) {
 }
 async function syncNotifications(user) {
   if (!supabase || !user?.id || window.__vesselNotificationsLoaded) return;
-  const {data}=await supabase.from('notifications').select('id,type,title,body,data,read_at,created_at').eq('user_id',user.id).order('created_at',{ascending:false}).limit(30);
+  const revision=++notificationsSyncRevision;
+  const {data,error}=await supabase.from('notifications').select('id,type,title,body,data,read_at,created_at').eq('user_id',user.id).order('created_at',{ascending:false}).limit(30);
+  if(savedUser?.id!==user.id||revision!==notificationsSyncRevision)return;
+  if(error){console.warn('Notification sync failed',error);vesselNotice('Не удалось загрузить уведомления.','error');return;}
   notifications=data||[]; window.__vesselNotificationsLoaded=true;
   if (document.querySelector('#app')) render();
 }
@@ -868,7 +872,13 @@ function connectSupabaseRealtime(user) {
       if(!server)return;
       server.name=row.name||server.name;server.icon=row.icon||server.icon;render();
     }).subscribe(),
-    supabase.channel(`vessel-notifications-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{notifications=[payload.new,...notifications];render();}).subscribe()
+    supabase.channel(`vessel-notifications-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{
+      const row=payload.new;
+      notificationsSyncRevision++;
+      window.__vesselNotificationsLoaded=true;
+      notifications=[row,...notifications.filter(item=>item.id!==row.id)];
+      render();
+    }).subscribe()
   ];
 }
 
@@ -931,6 +941,8 @@ function resetAuthenticatedRuntime() {
   window.__vesselSocialLoaded=false;
   window.__vesselDmThreadsLoaded=false;
   window.__vesselDmLoaded=false;
+  window.__vesselNotificationsLoaded=false;
+  notificationsSyncRevision++;
   window.__vesselMembersServerId=null;
   localStorage.removeItem('vesselUser');
   localStorage.removeItem('vesselToken');
