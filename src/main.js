@@ -11,6 +11,9 @@ let voiceChannelId = null;
 let voiceServerId = null;
 let voiceParticipants = [];
 const voicePeers = new Map();
+let voiceReconnectTimer = null;
+let voiceReconnectAttempt = 0;
+let voiceReconnectContext = null;
 let callStream = null;
 let remoteCallStream = null;
 let callPeer = null;
@@ -346,7 +349,39 @@ async function syncVoicePresence(user){
   if(status)status.textContent=`🎙 В голосовой комнате: ${Math.max(1,voiceParticipants.length)}`;
 }
 
+function cancelVoiceReconnect(){
+  if(voiceReconnectTimer){clearTimeout(voiceReconnectTimer);voiceReconnectTimer=null;}
+  voiceReconnectAttempt=0;
+  voiceReconnectContext=null;
+}
+
+function scheduleVoiceReconnect(user,channelId,serverId){
+  if(!user?.id||!channelId||!serverId)return;
+  if(voiceReconnectContext&&(voiceReconnectContext.channelId!==channelId||voiceReconnectContext.serverId!==serverId))cancelVoiceReconnect();
+  if(voiceReconnectTimer)return;
+  voiceReconnectContext={channelId,serverId};
+  voiceReconnectAttempt=Math.min(voiceReconnectAttempt+1,4);
+  const attempt=voiceReconnectAttempt;
+  const delay=Math.min(1000*(2**(attempt-1)),8000);
+  voiceReconnectTimer=setTimeout(async()=>{
+    voiceReconnectTimer=null;
+    if(!voiceReconnectContext||voiceReconnectContext.channelId!==channelId||voiceReconnectContext.serverId!==serverId)return;
+    if(activeChannelId!==channelId||activeChannelKind!=='voice'||getActiveServer()?.dbId!==serverId){cancelVoiceReconnect();return;}
+    if(callConnection||callStream||incomingCall){cancelVoiceReconnect();return;}
+    await toggleVoiceRoom(user,true);
+    if(voiceStream&&voiceRoom&&voiceChannelId===channelId){
+      cancelVoiceReconnect();
+      vesselNotice('Голосовая связь восстановлена.','success');
+      return;
+    }
+    if(attempt<4){scheduleVoiceReconnect(user,channelId,serverId);return;}
+    cancelVoiceReconnect();
+    vesselNotice('Голосовая связь потеряна. Нажми «Войти», чтобы попробовать снова.','error');
+  },delay);
+}
+
 async function leaveVoiceRoom(){
+  cancelVoiceReconnect();
   const room=voiceRoom;
   voiceRoom=null;
   voiceStream?.getTracks().forEach(track=>track.stop());voiceStream=null;
@@ -356,7 +391,8 @@ async function leaveVoiceRoom(){
   render();
 }
 
-async function toggleVoiceRoom(user){
+async function toggleVoiceRoom(user,reconnecting=false){
+  if(!reconnecting)cancelVoiceReconnect();
   if(voiceStream && voiceChannelId===activeChannelId){await leaveVoiceRoom();return;}
   if(!supabase||!user?.id||!activeChannelId||activeChannelKind!=='voice'){vesselNotice('Сначала открой голосовой канал.','error');return;}
   if(callConnection||callStream||incomingCall){vesselNotice('Заверши личный звонок или отклони входящий вызов перед входом в голосовой канал.','error');return;}
@@ -389,10 +425,22 @@ async function toggleVoiceRoom(user){
           return;
         }
         if(['CHANNEL_ERROR','TIMED_OUT','CLOSED'].includes(status)){
+          if(!settled){
+            for(const peerId of [...voicePeers.keys()])removeVoicePeer(peerId);
+            voiceParticipants=[];
+            render();
+            settled=true;clearTimeout(timer);reject(new Error(`VOICE_REALTIME_${status}`));
+            return;
+          }
+          const failedChannelId=voiceChannelId;
+          const failedServerId=voiceServerId;
+          voiceRoom=null;
+          voiceStream?.getTracks().forEach(track=>track.stop());voiceStream=null;
           for(const peerId of [...voicePeers.keys()])removeVoicePeer(peerId);
-          voiceParticipants=[];
+          voiceParticipants=[];voiceChannelId=null;voiceServerId=null;
+          if(supabase)void supabase.removeChannel(room).catch(error=>console.warn('Voice channel cleanup failed',error));
           render();
-          if(!settled){settled=true;clearTimeout(timer);reject(new Error(`VOICE_REALTIME_${status}`));}
+          scheduleVoiceReconnect(user,failedChannelId,failedServerId);
         }
       });
     });
@@ -401,10 +449,10 @@ async function toggleVoiceRoom(user){
     console.warn('Voice join failed',error);
     voiceStream?.getTracks().forEach(track=>track.stop());voiceStream=null;
     for(const peerId of [...voicePeers.keys()])removeVoicePeer(peerId);
-    voiceParticipants=[];voiceChannelId=null;
+    voiceParticipants=[];voiceChannelId=null;voiceServerId=null;
     if(room&&supabase){try{await supabase.removeChannel(room);}catch{}}
     if(voiceRoom===room)voiceRoom=null;
-    vesselNotice(error?.message?.startsWith('VOICE_REALTIME_')?'Не удалось подключиться к голосовой комнате. Попробуй ещё раз.':'Разреши Vessel доступ к микрофону.','error');
+    if(!reconnecting)vesselNotice(error?.message?.startsWith('VOICE_REALTIME_')?'Не удалось подключиться к голосовой комнате. Попробуй ещё раз.':'Разреши Vessel доступ к микрофону.','error');
     render();
   }
 }
