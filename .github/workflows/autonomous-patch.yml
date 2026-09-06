@@ -55,7 +55,22 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/main.js src/style.css server/schema.sql
           git commit -m "Apply verified Vessel UX and reliability improvements"
-          git push
+          pushed=false
+          for attempt in 1 2 3; do
+            if git push; then
+              pushed=true
+              break
+            fi
+            echo "main advanced during autonomous patch; rebasing attempt $attempt"
+            git fetch --depth=20 origin main
+            git rebase origin/main
+            node --check src/main.js
+            npm run build
+          done
+          if [ "$pushed" != "true" ]; then
+            echo "Unable to push verified autonomous patch after retries" >&2
+            exit 1
+          fi
           echo "changed=true" >> "$GITHUB_OUTPUT"
       - name: Dispatch checks and distributable builds for generated commit
         if: steps.commit.outputs.changed == 'true'
