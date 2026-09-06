@@ -460,6 +460,14 @@ async function sendCallInvite(user, peerId, payload) {
     await supabase.removeChannel(channel).catch(()=>{});
   }
 }
+async function resolveCallableFriend(user, peerId) {
+  if(!supabase||!user?.id||!peerId||peerId===user.id)return null;
+  const {data:link,error:linkError}=await supabase.from('friendships').select('friend_id').eq('user_id',user.id).eq('friend_id',peerId).maybeSingle();
+  if(linkError||!link)return null;
+  const {data:profile,error:profileError}=await supabase.from('profiles').select('id,username,avatar_color,status').eq('id',peerId).maybeSingle();
+  if(profileError)return null;
+  return profile||{id:peerId,username:'Пользователь'};
+}
 async function ensureCallInbox(user) {
   if (!supabase || !user?.id) return null;
   const name = callInboxName(user.id);
@@ -470,11 +478,13 @@ async function ensureCallInbox(user) {
   callInboxChannel.on('broadcast', {event:'call'}, async ({payload}) => {
     if (!payload || payload.to !== user.id) return;
     if (payload.type === 'invite') {
+      const caller=await resolveCallableFriend(user,payload.from);
+      if(!caller){console.warn('Ignored call invite from non-friend');return;}
       if (callConnection || callStream || incomingCall) {
         await sendCallInvite(user, payload.from, {type:'busy'});
         return;
       }
-      incomingCall = {from:payload.from, name:payload.name || 'Пользователь', video:!!payload.video, offer:payload.offer};
+      incomingCall = {from:payload.from, name:caller.username || 'Пользователь', video:!!payload.video, offer:payload.offer};
       render();
       return;
     }
@@ -523,7 +533,7 @@ async function ensureCallChannel(user, peerId) {
   callChannel=supabase.channel(name);
   callChannel.__roomName=name;
   callChannel.on('broadcast',{event:'signal'},async({payload})=>{
-    if(!payload || payload.to!==user.id) return;
+    if(!payload || payload.to!==user.id || payload.from!==callPeer) return;
     await handleCallSignal(user,payload.from,payload.signal,payload.video).catch(error=>{console.warn('Call signal failed',error);endCall(false);});
   });
   await subscribeChannel(callChannel);
