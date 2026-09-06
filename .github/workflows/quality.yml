@@ -24,6 +24,8 @@ jobs:
         run: python scripts/dm_history_smoke_check.py
       - name: Media context smoke check
         run: python scripts/media_context_smoke_check.py
+      - name: Notification read race smoke check
+        run: python scripts/notification_read_smoke_check.py
       - name: JavaScript syntax check
         run: node --check src/main.js
       - name: Install locked dependencies
