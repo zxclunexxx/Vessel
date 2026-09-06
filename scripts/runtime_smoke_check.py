@@ -79,7 +79,7 @@ required = [
     'maxlength="32"',
     'const selected=getActiveServer();',
     "if(activeDmId||activeChannelId!==channelId||activeChannelKind!=='text')return;",
-    'if(activeDmId!==friendId)return;',
+    'if(savedUser?.id!==dmLoadUserId||activeDmId!==friendId)return;',
 ]
 for item in required:
     if item not in main:
@@ -148,8 +148,8 @@ channel_load=main[channel_load_start:channel_load_start+1200]
 dm_load=main[dm_load_start:dm_load_start+1600]
 if "if(activeDmId||activeChannelId!==channelId||activeChannelKind!=='text')return;" not in channel_load:
     raise SystemExit('Channel message loader must discard stale async responses')
-if 'if(activeDmId!==friendId)return;' not in dm_load:
-    raise SystemExit('Direct-message loader must discard stale async responses')
+if 'if(savedUser?.id!==dmLoadUserId||activeDmId!==friendId)return;' not in dm_load:
+    raise SystemExit('Direct-message loader must discard stale async responses and stale authenticated sessions')
 
 servers_start=main.find('async function syncSupabaseServers(user)')
 social_start=main.find('async function syncSocial(user)')
