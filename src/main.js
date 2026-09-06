@@ -198,7 +198,15 @@ async function findAndRequestFriend(user) {
     return;
   }
   const {error:sendError}=await supabase.from('friend_requests').upsert({sender_id:user.id,receiver_id:target.id,status:'pending',updated_at:new Date().toISOString()},{onConflict:'sender_id,receiver_id'});
-  if(sendError){vesselNotice('Не удалось отправить заявку.','error');return;}
+  if(sendError){
+    if(sendError.code==='23505'){
+      window.__vesselSocialLoaded=false;
+      await syncSocial(user);
+      vesselNotice('Заявка уже существует или пользователь одновременно отправил заявку тебе. Открой раздел «Друзья».');
+      return;
+    }
+    vesselNotice('Не удалось отправить заявку.','error');return;
+  }
   window.__vesselSocialLoaded=false;
   await syncSocial(user);
   vesselNotice(`Заявка пользователю ${target.username} отправлена.`,'success');

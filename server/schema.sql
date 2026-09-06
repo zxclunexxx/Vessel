@@ -74,6 +74,9 @@ create table if not exists public.friend_requests (
   check (sender_id <> receiver_id)
 );
 create index if not exists friend_requests_receiver_status_idx on public.friend_requests(receiver_id,status);
+create unique index if not exists friend_requests_pending_pair_uidx
+on public.friend_requests (least(sender_id,receiver_id), greatest(sender_id,receiver_id))
+where status='pending';
 
 create table if not exists public.friendships (
   user_id uuid not null references public.profiles(id) on delete cascade,
