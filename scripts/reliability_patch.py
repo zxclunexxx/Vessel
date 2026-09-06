@@ -14,12 +14,16 @@ main_markers = [
     'Voice presence restore failed',
 ]
 schema_markers = [
-    'senders can retry terminal friend requests',
     'senders can cancel pending friend requests',
 ]
 
 missing = [marker for marker in main_markers if marker not in main]
 missing += [marker for marker in schema_markers if marker not in schema]
+if not any(marker in schema for marker in [
+    'senders can retry terminal friend requests',
+    'participants can update friend requests',
+]):
+    missing.append('friend request retry/update policy')
 if missing:
     raise SystemExit('Vessel reliability marker missing: ' + ', '.join(missing))
 
