@@ -32,6 +32,7 @@ let callCameraEnabled = true;
 let callInviteTimer = null;
 let activeServerIndex = 0;
 let activeServerId = localStorage.getItem('vesselActiveServerId') || null;
+let serversSyncRevision = 0;
 let activeChannelName = 'нет каналов';
 let activeChannelKind = 'text';
 let currentDm = null;
@@ -132,7 +133,9 @@ async function loadChannelMessages(channelId) {
 }
 async function syncSupabaseServers(user) {
   if (!supabase || window.__vesselServersLoaded || !user?.id) return;
+  const revision=++serversSyncRevision;
   const membershipsResult=await supabase.from('server_members').select('server_id,role').eq('user_id',user.id);
+  if(savedUser?.id!==user.id||revision!==serversSyncRevision)return;
   if(membershipsResult.error){vesselNotice('Не удалось загрузить список серверов.','error');return;}
   const memberships=membershipsResult.data||[];
   const memberIds=memberships.map(row=>row.server_id).filter(Boolean);
@@ -140,10 +143,12 @@ async function syncSupabaseServers(user) {
     supabase.from('servers').select('id,name,icon,owner_id').eq('owner_id',user.id).order('created_at'),
     memberIds.length ? supabase.from('servers').select('id,name,icon,owner_id').in('id',memberIds).order('created_at') : Promise.resolve({data:[],error:null})
   ]);
+  if(savedUser?.id!==user.id||revision!==serversSyncRevision)return;
   if(ownedResult.error||memberResult.error){vesselNotice('Не удалось загрузить данные серверов.','error');return;}
   const owned=ownedResult.data||[];
   const all=[...owned,...(memberResult.data||[]).filter(server=>!owned.some(item=>item.id===server.id))];
-  servers=[...all.map(server=>({id:server.id,dbId:server.id,icon:server.icon||server.name?.[0]?.toUpperCase()||'V',name:server.name,role:server.owner_id===user.id?'owner':memberships.find(member=>member.server_id===server.id)?.role||'member',channels:[]})),{id:'add-server',icon:'+',name:'Добавить сервер',add:true}];
+  const nextServers=[...all.map(server=>({id:server.id,dbId:server.id,icon:server.icon||server.name?.[0]?.toUpperCase()||'V',name:server.name,role:server.owner_id===user.id?'owner':memberships.find(member=>member.server_id===server.id)?.role||'member',channels:[]})),{id:'add-server',icon:'+',name:'Добавить сервер',add:true}];
+  servers=nextServers;
   window.__vesselServersLoaded=true;
   const selected=setActiveServer(activeServerId && all.some(server=>server.id===activeServerId) ? activeServerId : all[0]?.id||null);
   if(!selected){activeChannelId=null;activeChannelName='нет каналов';activeChannelKind='text';dbChannels=[];messages=[];serverMembers=[];window.__vesselMembersServerId=null;}
@@ -947,6 +952,7 @@ function resetAuthenticatedRuntime() {
 
   window.__vesselDbLoaded=false;
   window.__vesselServersLoaded=false;
+  serversSyncRevision++;
   window.__vesselSocialLoaded=false;
   socialSyncRevision++;
   window.__vesselDmThreadsLoaded=false;
@@ -1074,6 +1080,28 @@ async function joinByInvite(code, user) {
   return true;
 }
 
+async function refreshReadOnlyDirectMessage(user,peerId){
+  window.__vesselSocialLoaded=false;
+  window.__vesselDmThreadsLoaded=false;
+  await Promise.all([syncSocial(user),syncDmThreads(user)]);
+  if(activeDmId===peerId){
+    window.__vesselDmLoaded=false;
+    await loadDirectMessages(user,peerId);
+  }else render();
+}
+async function verifyDirectMessageAccess(user,peerId,{notify=true}={}){
+  if(!supabase||!user?.id||!peerId)return false;
+  const {data,error}=await supabase.from('friendships').select('friend_id').eq('user_id',user.id).eq('friend_id',peerId).maybeSingle();
+  if(error){
+    console.warn('DM friendship verification failed',error);
+    if(notify)vesselNotice('Не удалось проверить доступ к переписке. Попробуй ещё раз.','error');
+    return null;
+  }
+  if(data)return true;
+  await refreshReadOnlyDirectMessage(user,peerId);
+  if(notify)vesselNotice('Пользователь больше не в друзьях. История оставлена только для чтения.','error');
+  return false;
+}
 function render() {
   if (!savedUser) {
     document.querySelector('#app').innerHTML = `
@@ -1168,7 +1196,38 @@ function render() {
       </section>
       <aside class="members">${friendsOpen?`<div class="members-title">ДРУЗЬЯ — ${friends.length}</div><div class="dm-empty">${friendRequests.length?`Входящих заявок: ${friendRequests.length}`:outgoingFriendRequests.length?`Исходящих заявок: ${outgoingFriendRequests.length}`:'Выбери друга, чтобы открыть личный чат.'}</div>`:`${voiceStream?`<div class="voice-status">🎙 В голосовой комнате: ${Math.max(1,voiceParticipants.length)}</div>`:''}${membersList}`}</aside>
     </main><div class="modal hidden" id="settings-modal"><div class="modal-card"><button class="modal-close" id="close-settings">×</button><h2>Настройки профиля</h2><p>Измени данные, которые видят другие участники Vessel.</p><form id="settings-form"><label>Имя пользователя<input name="name" value="${escapeHtml(user.name)}" required minlength="2" maxlength="32" /></label><label>Статус<select name="status"><option value="online" ${['online','В сети'].includes(user.status)?'selected':''}>В сети</option><option value="dnd" ${['dnd','Не беспокоить'].includes(user.status)?'selected':''}>Не беспокоить</option><option value="away" ${['away','Отошёл'].includes(user.status)?'selected':''}>Отошёл</option></select></label><button class="primary" type="submit">Сохранить изменения</button></form><button class="danger" id="logout" type="button">Выйти из аккаунта</button></div></div>${incomingCall?`<div class="modal call-modal" id="incoming-call-modal"><div class="modal-card"><div class="call-avatar">${escapeHtml(incomingCall.name?.[0]?.toUpperCase()||'?')}</div><h2>${incomingCall.video?'Видеозвонок':'Аудиозвонок'}</h2><p>${escapeHtml(incomingCall.name)} звонит тебе в Vessel.</p><div class="call-actions"><button class="danger" id="reject-call" type="button">Отклонить</button><button class="primary" id="accept-call" type="button">Принять</button></div></div></div>`:''}`;
-  document.querySelector('.composer').addEventListener('submit', async e => { e.preventDefault(); const input=e.currentTarget.querySelector('input'); const text=input.value.trim(); if(!text)return; if(!supabase||!user.id){vesselNotice('Нужна активная сессия Vessel.','error');return;} if(activeDmId){ const peerId=activeDmId; const {error}=await supabase.from('direct_messages').insert({sender_id:user.id,receiver_id:peerId,body:text}); if(error){vesselNotice(`Не удалось отправить личное сообщение: ${error.message}`,'error');return;} window.__vesselDmThreadsLoaded=false; const refreshes=[syncDmThreads(user)]; if(activeDmId===peerId)refreshes.push(loadDirectMessages(user,peerId)); await Promise.all(refreshes); } else { if(!activeChannelId||activeChannelKind!=='text'){vesselNotice('Сначала выбери текстовый канал.','error');return;} const channelId=activeChannelId; const {error}=await supabase.from('messages').insert({channel_id:channelId,author_id:user.id,body:text}); if(error){vesselNotice(`Не удалось отправить сообщение: ${error.message}`,'error');return;} if(!activeDmId&&activeChannelId===channelId&&activeChannelKind==='text')messages.push({name:user.name,time:'только что',color:user.avatarColor||'#39d9a6',text}); } input.value=''; render(); const list=document.querySelector('.messages'); if(list)list.scrollTop=list.scrollHeight; });
+  document.querySelector('.composer').addEventListener('submit', async e => {
+    e.preventDefault();
+    const input=e.currentTarget.querySelector('input');
+    const text=input.value.trim();
+    if(!text)return;
+    if(!supabase||!user.id){vesselNotice('Нужна активная сессия Vessel.','error');return;}
+    if(activeDmId){
+      const peerId=activeDmId;
+      if((await verifyDirectMessageAccess(user,peerId))!==true)return;
+      const {error}=await supabase.from('direct_messages').insert({sender_id:user.id,receiver_id:peerId,body:text});
+      if(error){
+        const access=await verifyDirectMessageAccess(user,peerId,{notify:false});
+        if(access===false){vesselNotice('Пользователь больше не в друзьях. История оставлена только для чтения.','error');return;}
+        vesselNotice(`Не удалось отправить личное сообщение: ${error.message}`,'error');
+        return;
+      }
+      window.__vesselDmThreadsLoaded=false;
+      const refreshes=[syncDmThreads(user)];
+      if(activeDmId===peerId)refreshes.push(loadDirectMessages(user,peerId));
+      await Promise.all(refreshes);
+    } else {
+      if(!activeChannelId||activeChannelKind!=='text'){vesselNotice('Сначала выбери текстовый канал.','error');return;}
+      const channelId=activeChannelId;
+      const {error}=await supabase.from('messages').insert({channel_id:channelId,author_id:user.id,body:text});
+      if(error){vesselNotice(`Не удалось отправить сообщение: ${error.message}`,'error');return;}
+      if(!activeDmId&&activeChannelId===channelId&&activeChannelKind==='text')messages.push({name:user.name,time:'только что',color:user.avatarColor||'#39d9a6',text});
+    }
+    input.value='';
+    render();
+    const list=document.querySelector('.messages');
+    if(list)list.scrollTop=list.scrollHeight;
+  });
   document.querySelector('#emoji-button')?.addEventListener('click',async()=>{
     const emoji=await vesselChoice('Эмодзи',[{label:'😀',value:'😀'},{label:'😂',value:'😂'},{label:'❤️',value:'❤️'},{label:'👍',value:'👍'},{label:'🔥',value:'🔥'},{label:'🎉',value:'🎉'},{label:'😎',value:'😎'},{label:'🤝',value:'🤝'}]);
     if(!emoji)return;
@@ -1187,12 +1246,20 @@ function render() {
       const targetDmId=activeDmId;
       const targetChannelId=!targetDmId&&activeChannelKind==='text'?activeChannelId:null;
       if(!targetDmId&&!targetChannelId){vesselNotice('Открой текстовый канал или личный чат.','error');return;}
+      if(targetDmId&&(await verifyDirectMessageAccess(user,targetDmId))!==true)return;
       const attachment=await uploadVesselFile(file,user); if(!attachment)return;
+      if(targetDmId&&(await verifyDirectMessageAccess(user,targetDmId))!==true){await cleanupFailedAttachment(attachment);return;}
       const body=`📎 ${file.name}`;
       if(targetDmId){
         const peerId=targetDmId;
         const {error}=await supabase.from('direct_messages').insert({sender_id:user.id,receiver_id:peerId,body,attachments:[attachment]});
-        if(error){await cleanupFailedAttachment(attachment);vesselNotice(`Не удалось отправить файл: ${error.message}`,'error');return;}
+        if(error){
+          await cleanupFailedAttachment(attachment);
+          const access=await verifyDirectMessageAccess(user,peerId,{notify:false});
+          if(access===false){vesselNotice('Пользователь больше не в друзьях. История оставлена только для чтения.','error');return;}
+          vesselNotice(`Не удалось отправить файл: ${error.message}`,'error');
+          return;
+        }
         window.__vesselDmThreadsLoaded=false;
         const refreshes=[syncDmThreads(user)];
         if(activeDmId===peerId)refreshes.push(loadDirectMessages(user,peerId));
