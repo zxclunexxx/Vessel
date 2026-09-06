@@ -444,7 +444,7 @@ async function toggleVoiceRoom(user,reconnecting=false){
     voiceStream=stream;
     voiceChannelId=targetChannelId;
     voiceServerId=targetServerId;
-    room=supabase.channel(`voice-${targetChannelId}`,{config:{presence:{key:user.id}}});
+    room=supabase.channel(`voice-${targetChannelId}`,{config:{private:true,presence:{key:user.id}}});
     voiceRoom=room;
     room.on('broadcast',{event:'voice-signal'},({payload})=>handleVoiceSignal(user,payload).catch(error=>console.warn('Voice signal failed',error)));
     room.on('presence',{event:'sync'},()=>{if(room===voiceRoom)syncVoicePresence(user).catch(error=>console.warn('Voice presence failed',error));});
@@ -546,7 +546,7 @@ function subscribeChannel(channel,onDisconnect=null) {
 }
 async function sendCallInvite(user, peerId, payload) {
   if (!supabase || !user?.id || !peerId) return false;
-  const channel = supabase.channel(callInboxName(peerId));
+  const channel = supabase.channel(callInboxName(peerId),{config:{private:true}});
   try {
     await subscribeChannel(channel);
     const result=await channel.send({type:'broadcast', event:'call', payload:{from:user.id,to:peerId,...payload}});
@@ -573,7 +573,7 @@ async function ensureCallInbox(user) {
   const previousInbox=callInboxChannel;
   callInboxChannel=null;
   if (previousInbox) await supabase.removeChannel(previousInbox).catch(()=>{});
-  const inbox=supabase.channel(name);
+  const inbox=supabase.channel(name,{config:{private:true}});
   callInboxChannel=inbox;
   inbox.__roomName = name;
   inbox.on('broadcast', {event:'call'}, async ({payload}) => {
@@ -641,7 +641,7 @@ async function ensureCallChannel(user, peerId) {
   const previousCallChannel=callChannel;
   callChannel=null;
   if(previousCallChannel)await supabase.removeChannel(previousCallChannel).catch(()=>{});
-  const room=supabase.channel(name);
+  const room=supabase.channel(name,{config:{private:true}});
   callChannel=room;
   room.__roomName=name;
   room.on('broadcast',{event:'signal'},async({payload})=>{
@@ -1192,6 +1192,45 @@ async function verifyDirectMessageAccess(user,peerId,{notify=true}={}){
   if(notify)vesselNotice('Пользователь больше не в друзьях. История оставлена только для чтения.','error');
   return false;
 }
+async function refreshAfterChannelAccessLoss(user,channelId){
+  const refreshUserId=user?.id||null;
+  if(!refreshUserId||savedUser?.id!==refreshUserId)return;
+  const lostServerId=getActiveServer()?.dbId||null;
+  if(voiceStream&&lostServerId&&voiceServerId===lostServerId)await leaveVoiceRoom();
+  activeChannelId=null;
+  activeChannelName='нет каналов';
+  activeChannelKind='text';
+  dbChannels=[];
+  messages=[];
+  serverMembers=[];
+  window.__vesselMembersServerId=null;
+  window.__vesselServersLoaded=false;
+  await syncSupabaseServers(user);
+  if(savedUser?.id!==refreshUserId)return;
+  const next=getActiveServer();
+  if(next?.dbId){
+    next.__channelsLoaded=false;
+    await syncSupabaseChannels(next);
+    await syncServerMembers(user,next);
+  }else render();
+}
+async function verifyChannelAccess(user,channelId,{notify=true}={}){
+  if(!supabase||!user?.id||!channelId)return false;
+  const accessUserId=user.id;
+  if(savedUser?.id!==accessUserId)return null;
+  const {data,error}=await supabase.from('channels').select('id').eq('id',channelId).maybeSingle();
+  if(savedUser?.id!==accessUserId)return null;
+  if(error){
+    console.warn('Channel access verification failed',error);
+    if(notify)vesselNotice('Не удалось проверить доступ к каналу. Попробуй ещё раз.','error');
+    return null;
+  }
+  if(data)return true;
+  await refreshAfterChannelAccessLoss(user,channelId);
+  if(savedUser?.id!==accessUserId)return null;
+  if(notify)vesselNotice('Доступ к каналу потерян. Список серверов обновлён.','error');
+  return false;
+}
 function render() {
   if (!savedUser) {
     document.querySelector('#app').innerHTML = `
@@ -1311,9 +1350,16 @@ function render() {
     } else {
       if(!activeChannelId||activeChannelKind!=='text'){vesselNotice('Сначала выбери текстовый канал.','error');return;}
       const channelId=activeChannelId;
+      if((await verifyChannelAccess(user,channelId))!==true)return;
+      if(savedUser?.id!==sendSessionUserId)return;
       const {error}=await supabase.from('messages').insert({channel_id:channelId,author_id:sendSessionUserId,body:text});
       if(savedUser?.id!==sendSessionUserId)return;
-      if(error){vesselNotice(`Не удалось отправить сообщение: ${error.message}`,'error');return;}
+      if(error){
+        const access=await verifyChannelAccess(user,channelId,{notify:false});
+        if(access===false){vesselNotice('Доступ к каналу потерян. Список серверов обновлён.','error');return;}
+        vesselNotice(`Не удалось отправить сообщение: ${error.message}`,'error');
+        return;
+      }
       if(!activeDmId&&activeChannelId===channelId&&activeChannelKind==='text')messages.push({name:user.name,time:'только что',color:user.avatarColor||'#39d9a6',text});
     }
     if(savedUser?.id!==sendSessionUserId)return;
@@ -1343,11 +1389,13 @@ function render() {
       const targetChannelId=!targetDmId&&activeChannelKind==='text'?activeChannelId:null;
       if(!targetDmId&&!targetChannelId){vesselNotice('Открой текстовый канал или личный чат.','error');return;}
       if(targetDmId&&(await verifyDirectMessageAccess(user,targetDmId))!==true)return;
+      if(targetChannelId&&(await verifyChannelAccess(user,targetChannelId))!==true)return;
       if(savedUser?.id!==attachmentSessionUserId)return;
       const attachmentContext=targetDmId?`dm/${targetDmId}`:`channel/${targetChannelId}`;
       const attachment=await uploadVesselFile(file,user,attachmentContext); if(!attachment)return;
       if(savedUser?.id!==attachmentSessionUserId){await cleanupFailedAttachment(attachment);return;}
       if(targetDmId&&(await verifyDirectMessageAccess(user,targetDmId))!==true){await cleanupFailedAttachment(attachment);return;}
+      if(targetChannelId&&(await verifyChannelAccess(user,targetChannelId))!==true){await cleanupFailedAttachment(attachment);return;}
       if(savedUser?.id!==attachmentSessionUserId){await cleanupFailedAttachment(attachment);return;}
       const body=`📎 ${file.name}`;
       if(targetDmId){
@@ -1368,7 +1416,13 @@ function render() {
       } else {
         const {error}=await supabase.from('messages').insert({channel_id:targetChannelId,author_id:attachmentSessionUserId,body,attachments:[attachment]});
         if(savedUser?.id!==attachmentSessionUserId){if(error)await cleanupFailedAttachment(attachment);return;}
-        if(error){await cleanupFailedAttachment(attachment);vesselNotice(`Не удалось отправить файл: ${error.message}`,'error');return;}
+        if(error){
+          await cleanupFailedAttachment(attachment);
+          const access=await verifyChannelAccess(user,targetChannelId,{notify:false});
+          if(access===false){vesselNotice('Доступ к каналу потерян. Список серверов обновлён.','error');return;}
+          vesselNotice(`Не удалось отправить файл: ${error.message}`,'error');
+          return;
+        }
         if(!activeDmId&&activeChannelId===targetChannelId&&activeChannelKind==='text'){
           messages.push({name:user.name,time:'только что',color:user.avatarColor||'#39d9a6',text:body,attachments:[attachment]});
         }

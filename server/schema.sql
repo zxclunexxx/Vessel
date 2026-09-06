@@ -304,6 +304,104 @@ alter table public.direct_messages enable row level security;
 alter table public.server_invites enable row level security;
 alter table public.notifications enable row level security;
 
+-- Vessel private Realtime authorization -----------------------------------------
+-- Call/voice WebRTC signaling uses private Supabase Realtime topics. Read access is scoped
+-- to the current inbox, the current friendship pair, or an authorized voice channel; writes
+-- additionally bind broadcast payload.from to auth.uid() to prevent sender spoofing.
+alter table realtime.messages enable row level security;
+drop policy if exists "vessel realtime receive" on realtime.messages;
+drop policy if exists "vessel realtime send" on realtime.messages;
+
+create policy "vessel realtime receive"
+on realtime.messages
+for select
+to authenticated
+using (
+  (
+    realtime.messages.extension = 'broadcast'
+    and realtime.topic() = ('vessel-call-inbox-' || (select auth.uid())::text)
+  )
+  or (
+    realtime.messages.extension = 'broadcast'
+    and exists (
+      select 1
+      from public.friendships f
+      where f.user_id = (select auth.uid())
+        and realtime.topic() = (
+          'vessel-call-'
+          || least((select auth.uid())::text, f.friend_id::text)
+          || '-'
+          || greatest((select auth.uid())::text, f.friend_id::text)
+        )
+    )
+  )
+  or (
+    realtime.messages.extension in ('broadcast','presence')
+    and exists (
+      select 1
+      from public.channels c
+      where c.kind = 'voice'
+        and realtime.topic() = ('voice-' || c.id::text)
+    )
+  )
+);
+
+create policy "vessel realtime send"
+on realtime.messages
+for insert
+to authenticated
+with check (
+  (
+    realtime.messages.extension = 'broadcast'
+    and realtime.messages.event = 'call'
+    and (realtime.messages.payload ->> 'from') = (select auth.uid())::text
+    and exists (
+      select 1
+      from public.friendships f
+      where f.user_id = (select auth.uid())
+        and realtime.topic() = ('vessel-call-inbox-' || f.friend_id::text)
+        and (realtime.messages.payload ->> 'to') = f.friend_id::text
+    )
+  )
+  or (
+    realtime.messages.extension = 'broadcast'
+    and realtime.messages.event = 'signal'
+    and (realtime.messages.payload ->> 'from') = (select auth.uid())::text
+    and exists (
+      select 1
+      from public.friendships f
+      where f.user_id = (select auth.uid())
+        and realtime.topic() = (
+          'vessel-call-'
+          || least((select auth.uid())::text, f.friend_id::text)
+          || '-'
+          || greatest((select auth.uid())::text, f.friend_id::text)
+        )
+        and (realtime.messages.payload ->> 'to') = f.friend_id::text
+    )
+  )
+  or (
+    realtime.messages.extension = 'broadcast'
+    and realtime.messages.event = 'voice-signal'
+    and (realtime.messages.payload ->> 'from') = (select auth.uid())::text
+    and exists (
+      select 1
+      from public.channels c
+      where c.kind = 'voice'
+        and realtime.topic() = ('voice-' || c.id::text)
+    )
+  )
+  or (
+    realtime.messages.extension = 'presence'
+    and exists (
+      select 1
+      from public.channels c
+      where c.kind = 'voice'
+        and realtime.topic() = ('voice-' || c.id::text)
+    )
+  )
+);
+
 
 -- Column-level profile privacy --------------------------------------------------
 -- RLS controls which profile rows an authenticated user may see. Column grants additionally
