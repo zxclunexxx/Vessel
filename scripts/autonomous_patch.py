@@ -66,12 +66,43 @@ new="""    const {data:updated,error}=await supabase.from('profiles').update({us
     localStorage.setItem('vesselUser',JSON.stringify(savedUser));modal.classList.add('hidden');render();"""
 replace_once(old,new,'confirmed profile update')
 
-for required in ['vessel-profiles-${user.id}','vessel-servers-${user.id}',"error.code==='23505'",'.select(\'username,status,avatar_color\').single()']:
-    if required not in text:
-        raise SystemExit(f'missing profile/server realtime hardening: {required}')
+# Reciprocal pending friend requests are blocked by the database. Surface the race/duplicate
+# case as a normal state instead of a generic failure.
+old="""  if(sendError){vesselNotice('Не удалось отправить заявку.','error');return;}"""
+new="""  if(sendError){
+    if(sendError.code==='23505'){
+      window.__vesselSocialLoaded=false;
+      await syncSocial(user);
+      vesselNotice('Заявка уже существует или пользователь одновременно отправил заявку тебе. Открой раздел «Друзья».');
+      return;
+    }
+    vesselNotice('Не удалось отправить заявку.','error');return;
+  }"""
+replace_once(old,new,'friend request duplicate handling')
+
+schema_path=Path('server/schema.sql')
+schema=schema_path.read_text(encoding='utf-8')
+schema_old="""create index if not exists friend_requests_receiver_status_idx on public.friend_requests(receiver_id,status);
+"""
+schema_new="""create index if not exists friend_requests_receiver_status_idx on public.friend_requests(receiver_id,status);
+create unique index if not exists friend_requests_pending_pair_uidx
+on public.friend_requests (least(sender_id,receiver_id), greatest(sender_id,receiver_id))
+where status='pending';
+"""
+if schema_old in schema and 'friend_requests_pending_pair_uidx' not in schema:
+    schema=schema.replace(schema_old,schema_new,1)
+    schema_path.write_text(schema,encoding='utf-8')
+    changed=True
+elif 'friend_requests_pending_pair_uidx' not in schema:
+    raise SystemExit('friend request schema anchor not found')
+
+for required in ['vessel-profiles-${user.id}','vessel-servers-${user.id}',"error.code==='23505'",'.select(\'username,status,avatar_color\').single()','friend_requests_pending_pair_uidx']:
+    source=text if required!='friend_requests_pending_pair_uidx' else schema
+    if required not in source:
+        raise SystemExit(f'missing Vessel hardening: {required}')
 
 if changed:
     path.write_text(text,encoding='utf-8')
-    print('Applied realtime profile and server synchronization')
+    print('Applied Vessel realtime/profile/friend-request hardening')
 else:
-    print('Realtime profile and server synchronization already applied; nothing to change')
+    print('Vessel hardening already applied; nothing to change')
