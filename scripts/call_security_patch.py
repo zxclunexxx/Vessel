@@ -4,6 +4,24 @@ path = Path('src/main.js')
 text = path.read_text(encoding='utf-8')
 changed = False
 
+TARGET_MARKERS = [
+    'async function resolveCallableFriend(user, peerId)',
+    "select('friend_id').eq('user_id',user.id).eq('friend_id',peerId).maybeSingle()",
+    "if(!caller){console.warn('Ignored call invite from non-friend');return;}",
+    "name:caller.username || 'Пользователь'",
+    "payload.to!==user.id || payload.from!==callPeer",
+    "if(callPeer===row.friend_id)await endCall(false);",
+    "if(callPeer===friendId)await endCall(false);",
+]
+
+# Later call-reconnect refactors can legitimately reshape the surrounding Realtime blocks.
+# If every security invariant is already present, treat the patch as applied instead of
+# depending on obsolete whole-block anchors. Partial states still fall through to the strict
+# transformations below and fail if neither the legacy nor expected form can be recognized.
+if all(marker in text for marker in TARGET_MARKERS):
+    print('Vessel call security/lifecycle hardening already applied; nothing to change')
+    raise SystemExit(0)
+
 
 def replace_once(old, new, label):
     global text, changed
@@ -93,15 +111,7 @@ remove_friend_new = """    if(!await vesselConfirm(`Удалить ${friend?.use
     const {error}=await supabase.from('friendships').delete().or(`and(user_id.eq.${user.id},friend_id.eq.${friendId}),and(user_id.eq.${friendId},friend_id.eq.${user.id})`);"""
 replace_once(remove_friend_old, remove_friend_new, 'local unfriend call teardown')
 
-for marker in [
-    'async function resolveCallableFriend(user, peerId)',
-    "select('friend_id').eq('user_id',user.id).eq('friend_id',peerId).maybeSingle()",
-    "if(!caller){console.warn('Ignored call invite from non-friend');return;}",
-    "name:caller.username || 'Пользователь'",
-    "payload.to!==user.id || payload.from!==callPeer",
-    "if(callPeer===row.friend_id)await endCall(false);",
-    "if(callPeer===friendId)await endCall(false);",
-]:
+for marker in TARGET_MARKERS:
     if marker not in text:
         raise SystemExit(f'missing call security marker: {marker}')
 
