@@ -15,6 +15,7 @@ on:
       - 'scripts/voice_reconnect_patch.py'
       - 'scripts/voice_switch_patch.py'
       - 'scripts/call_reconnect_patch.py'
+      - 'scripts/message_context_patch.py'
 
 permissions:
   contents: write
@@ -45,12 +46,15 @@ jobs:
           if [ -f scripts/voice_reconnect_patch.py ]; then python scripts/voice_reconnect_patch.py; fi
           if [ -f scripts/voice_switch_patch.py ]; then python scripts/voice_switch_patch.py; fi
           if [ -f scripts/call_reconnect_patch.py ]; then python scripts/call_reconnect_patch.py; fi
+          if [ -f scripts/message_context_patch.py ]; then python scripts/message_context_patch.py; fi
       - name: Check JavaScript syntax
         run: node --check src/main.js
-      - name: Install dependencies
+      - name: Install locked dependencies
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
-        run: npm install --no-package-lock
+        run: npm ci
+      - name: Audit full dependency graph
+        run: npm audit --audit-level=high
       - name: Verify production build
         run: npm run build
       - name: Commit verified changes
@@ -75,6 +79,8 @@ jobs:
             git fetch --depth=20 origin main
             git rebase origin/main
             node --check src/main.js
+            npm ci
+            npm audit --audit-level=high
             npm run build
           done
           if [ "$pushed" != "true" ]; then
