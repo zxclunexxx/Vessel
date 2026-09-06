@@ -23,6 +23,8 @@ jobs:
       - name: JavaScript syntax check
         run: node --check src/main.js
       - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
         run: npm install --no-package-lock
       - name: Production build
         run: npm run build
