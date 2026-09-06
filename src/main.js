@@ -346,11 +346,12 @@ async function syncVoicePresence(user){
 }
 
 async function leaveVoiceRoom(){
+  const room=voiceRoom;
+  voiceRoom=null;
   voiceStream?.getTracks().forEach(track=>track.stop());voiceStream=null;
   for(const peerId of [...voicePeers.keys()])removeVoicePeer(peerId);
   voiceParticipants=[];voiceChannelId=null;
-  if(voiceRoom&&supabase){try{await supabase.removeChannel(voiceRoom);}catch{}}
-  voiceRoom=null;
+  if(room&&supabase){try{await supabase.removeChannel(room);}catch{}}
   render();
 }
 
@@ -372,15 +373,24 @@ async function toggleVoiceRoom(user){
       let settled=false;
       const timer=setTimeout(()=>{if(!settled){settled=true;reject(new Error('VOICE_REALTIME_TIMEOUT'));}},10000);
       room.subscribe(async status=>{
-        if(settled||room!==voiceRoom)return;
+        if(room!==voiceRoom)return;
         if(status==='SUBSCRIBED'){
-          settled=true;clearTimeout(timer);
-          try{await room.track({user_id:user.id,name:user.name});await syncVoicePresence(user);resolve();}
-          catch(error){reject(error);}
+          try{
+            await room.track({user_id:user.id,name:user.name});
+            await syncVoicePresence(user);
+            if(!settled){settled=true;clearTimeout(timer);resolve();}
+            else render();
+          }catch(error){
+            if(!settled){settled=true;clearTimeout(timer);reject(error);}
+            else console.warn('Voice presence restore failed',error);
+          }
           return;
         }
         if(['CHANNEL_ERROR','TIMED_OUT','CLOSED'].includes(status)){
-          settled=true;clearTimeout(timer);reject(new Error(`VOICE_REALTIME_${status}`));
+          for(const peerId of [...voicePeers.keys()])removeVoicePeer(peerId);
+          voiceParticipants=[];
+          render();
+          if(!settled){settled=true;clearTimeout(timer);reject(new Error(`VOICE_REALTIME_${status}`));}
         }
       });
     });
@@ -406,25 +416,33 @@ function callInboxName(userId) { return `vessel-call-inbox-${userId}`; }
 function serialiseDescription(description) { return description ? {type: description.type, sdp: description.sdp} : null; }
 function subscribeChannel(channel) {
   if (channel.__subscribed) return Promise.resolve(channel);
-  return new Promise((resolve, reject) => {
+  if (channel.__subscribePromise) return channel.__subscribePromise;
+  channel.__subscribePromise = new Promise((resolve, reject) => {
     let settled = false;
     const timer = setTimeout(() => {
-      if (!settled) { settled = true; reject(new Error('Realtime channel timeout')); }
+      if (!settled) { settled = true; channel.__subscribed = false; reject(new Error('Realtime channel timeout')); }
     }, 10000);
     channel.subscribe(status => {
-      if (settled) return;
       if (status === 'SUBSCRIBED') {
-        settled = true;
-        clearTimeout(timer);
         channel.__subscribed = true;
-        resolve(channel);
-      } else if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status)) {
-        settled = true;
-        clearTimeout(timer);
-        reject(new Error(`Realtime channel ${status}`));
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(channel);
+        }
+        return;
+      }
+      if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status)) {
+        channel.__subscribed = false;
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          reject(new Error(`Realtime channel ${status}`));
+        }
       }
     });
-  });
+  }).finally(() => { channel.__subscribePromise = null; });
+  return channel.__subscribePromise;
 }
 async function sendCallInvite(user, peerId, payload) {
   if (!supabase || !user?.id || !peerId) return false;
@@ -483,7 +501,16 @@ async function ensureCallInbox(user) {
       return;
     }
   });
-  try { await subscribeChannel(callInboxChannel); } catch (error) { console.warn('Call inbox failed', error); }
+  try {
+    await subscribeChannel(callInboxChannel);
+  } catch (error) {
+    console.warn('Call inbox failed', error);
+    const failedChannel=callInboxChannel;
+    callInboxChannel=null;
+    if(failedChannel&&supabase){try{await supabase.removeChannel(failedChannel);}catch{}}
+    setTimeout(()=>{if(savedUser?.id===user.id)ensureCallInbox(savedUser).catch(retryError=>console.warn('Call inbox retry failed',retryError));},3000);
+    return null;
+  }
   return callInboxChannel;
 }
 async function ensureCallChannel(user, peerId) {
@@ -501,8 +528,10 @@ async function ensureCallChannel(user, peerId) {
   return callChannel;
 }
 async function sendCallSignal(user,peerId,signal,video) {
-  const room=await ensureCallChannel(user,peerId); if(!room)return;
-  await room.send({type:'broadcast',event:'signal',payload:{from:user.id,to:peerId,signal,video:!!video}});
+  const room=await ensureCallChannel(user,peerId);
+  if(!room)throw new Error('CALL_SIGNAL_CHANNEL_UNAVAILABLE');
+  const result=await room.send({type:'broadcast',event:'signal',payload:{from:user.id,to:peerId,signal,video:!!video}});
+  if(result!=='ok')throw new Error(`CALL_SIGNAL_${String(result||'FAILED').toUpperCase()}`);
 }
 async function flushLocalIceCandidates(user, peerId, video) {
   if (!callAccepted || !localIceCandidates.length) return;

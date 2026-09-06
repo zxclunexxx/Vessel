@@ -353,8 +353,22 @@ create policy "members can send channel messages" on public.messages for insert 
 );
 
 create policy "friend requests participants can read" on public.friend_requests for select to authenticated using(sender_id=(select auth.uid()) or receiver_id=(select auth.uid()));
-create policy "users can send friend requests" on public.friend_requests for insert to authenticated with check(sender_id=(select auth.uid()) and sender_id<>receiver_id);
+create policy "users can send friend requests" on public.friend_requests for insert to authenticated with check(
+  sender_id=(select auth.uid())
+  and sender_id<>receiver_id
+  and not exists(select 1 from public.friendships f where f.user_id=(select auth.uid()) and f.friend_id=friend_requests.receiver_id)
+);
 create policy "receivers can answer friend requests" on public.friend_requests for update to authenticated using(receiver_id=(select auth.uid())) with check(receiver_id=(select auth.uid()) and status in ('accepted','declined'));
+create policy "senders can retry terminal friend requests" on public.friend_requests for update to authenticated
+using(sender_id=(select auth.uid()) and status in ('accepted','declined','cancelled'))
+with check(
+  sender_id=(select auth.uid())
+  and sender_id<>receiver_id
+  and status='pending'
+  and not exists(select 1 from public.friendships f where f.user_id=(select auth.uid()) and f.friend_id=friend_requests.receiver_id)
+);
+create policy "senders can cancel pending friend requests" on public.friend_requests for delete to authenticated
+using(sender_id=(select auth.uid()) and status='pending');
 
 create policy "friends can read friendships" on public.friendships for select to authenticated using(user_id=(select auth.uid()) or friend_id=(select auth.uid()));
 create policy "friends can delete friendship links" on public.friendships for delete to authenticated using(user_id=(select auth.uid()) or friend_id=(select auth.uid()));
