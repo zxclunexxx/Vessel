@@ -707,6 +707,23 @@ function connectSupabaseRealtime(user) {
     supabase.channel(`vessel-channel-messages-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},payload=>{
       if(payload.new.channel_id===activeChannelId && payload.new.author_id!==user.id)loadChannelMessages(activeChannelId).catch(error=>console.warn('Message refresh failed',error));
     }).subscribe(),
+    supabase.channel(`vessel-profiles-${user.id}`).on('postgres_changes',{event:'UPDATE',schema:'public',table:'profiles'},payload=>{
+      const row=payload.new;
+      if(!row?.id)return;
+      let dirty=false;
+      if(savedUser?.id===row.id){savedUser={...savedUser,name:row.username||savedUser.name,status:row.status||savedUser.status,avatarColor:row.avatar_color||savedUser.avatarColor};localStorage.setItem('vesselUser',JSON.stringify(savedUser));dirty=true;}
+      const friend=friends.find(item=>item.id===row.id);if(friend){friend.username=row.username||friend.username;friend.status=row.status||friend.status;friend.avatar_color=row.avatar_color||friend.avatar_color;dirty=true;}
+      const thread=dmThreads.find(item=>item.id===row.id);if(thread){thread.username=row.username||thread.username;thread.status=row.status||thread.status;thread.avatar_color=row.avatar_color||thread.avatar_color;dirty=true;}
+      const member=serverMembers.find(item=>item.id===row.id);if(member){member.username=row.username||member.username;member.status=row.status||member.status;member.avatar_color=row.avatar_color||member.avatar_color;dirty=true;}
+      if(activeDmId===row.id&&row.username){currentDm=row.username;dirty=true;}
+      if(dirty)render();
+    }).subscribe(),
+    supabase.channel(`vessel-servers-${user.id}`).on('postgres_changes',{event:'UPDATE',schema:'public',table:'servers'},payload=>{
+      const row=payload.new;
+      const server=row?.id?servers.find(item=>item.id===row.id):null;
+      if(!server)return;
+      server.name=row.name||server.name;server.icon=row.icon||server.icon;render();
+    }).subscribe(),
     supabase.channel(`vessel-notifications-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{notifications=[payload.new,...notifications];render();}).subscribe()
   ];
 }
@@ -1028,9 +1045,12 @@ function render() {
     const status=String(data.get('status')||'online');
     if(name.length<2||name.length>32){vesselNotice('Имя пользователя должно содержать от 2 до 32 символов.','error');return;}
     if(!supabase||!user.id){vesselNotice('Сессия Vessel недоступна.','error');return;}
-    const {error}=await supabase.from('profiles').update({username:name,status}).eq('id',user.id);
-    if(error){vesselNotice('Не удалось сохранить профиль.','error');return;}
-    savedUser={...user,name,status};
+    const {data:updated,error}=await supabase.from('profiles').update({username:name,status}).eq('id',user.id).select('username,status,avatar_color').single();
+    if(error){
+      vesselNotice(error.code==='23505'?'Это имя пользователя уже занято.':'Не удалось сохранить профиль.','error');
+      return;
+    }
+    savedUser={...user,name:updated?.username||name,status:updated?.status||status,avatarColor:updated?.avatar_color||user.avatarColor};
     localStorage.setItem('vesselUser',JSON.stringify(savedUser));
     modal.classList.add('hidden');
     vesselNotice('Профиль сохранён.','success');

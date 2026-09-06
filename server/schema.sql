@@ -450,4 +450,5 @@ as $$
   order by pm.last_message_at desc;
 $$;
 revoke all on function public.vessel_dm_threads() from public;
+revoke execute on function public.vessel_dm_threads() from anon;
 grant execute on function public.vessel_dm_threads() to authenticated;
