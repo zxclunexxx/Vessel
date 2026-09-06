@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'scripts/autonomous_patch.py'
+      - 'scripts/reliability_patch.py'
 
 permissions:
   contents: write
@@ -21,7 +22,9 @@ jobs:
         with:
           node-version: '24'
       - name: Apply patch
-        run: python scripts/autonomous_patch.py
+        run: |
+          python scripts/autonomous_patch.py
+          if [ -f scripts/reliability_patch.py ]; then python scripts/reliability_patch.py; fi
       - name: Check JavaScript syntax
         run: node --check src/main.js
       - name: Install dependencies
