@@ -125,8 +125,10 @@ async function syncSupabaseMessages() {
 }
 async function loadChannelMessages(channelId) {
   if (!supabase || !channelId) return;
+  const sessionUserId=savedUser?.id||null;
+  if(!sessionUserId)return;
   const {data,error} = await supabase.from('messages').select('body,attachments,created_at,profiles(username,avatar_color)').eq('channel_id',channelId).order('created_at',{ascending:false}).limit(100);
-  if(activeDmId||activeChannelId!==channelId||activeChannelKind!=='text')return;
+  if(savedUser?.id!==sessionUserId||activeDmId||activeChannelId!==channelId||activeChannelKind!=='text')return;
   if(error){vesselNotice('Не удалось загрузить сообщения канала.','error');return;}
   messages = (data||[]).reverse().map(m=>({name:m.profiles?.username||'Участник',time:new Date(m.created_at).toLocaleString('ru-RU'),color:m.profiles?.avatar_color||'#8b7cff',text:m.body,attachments:m.attachments||[]}));
   render();
@@ -156,8 +158,13 @@ async function syncSupabaseServers(user) {
 }
 async function syncSupabaseChannels(server) {
   if (!supabase || !server?.dbId || server.__channelsLoaded) return;
-  const {data,error}=await supabase.from('channels').select('id,name,kind,position').eq('server_id',server.dbId).order('position');
-  const serverStillActive=server.id===getActiveServer()?.id;
+  const sessionUserId=savedUser?.id||null;
+  const serverId=server.dbId;
+  if(!sessionUserId)return;
+  const {data,error}=await supabase.from('channels').select('id,name,kind,position').eq('server_id',serverId).order('position');
+  const activeServer=getActiveServer();
+  const serverStillActive=Boolean(savedUser?.id===sessionUserId&&server===activeServer&&serverId===activeServer?.dbId);
+  if(savedUser?.id!==sessionUserId||!servers.includes(server))return;
   if(error){console.warn('Channel sync failed',error);if(serverStillActive)vesselNotice('Не удалось загрузить каналы сервера.','error');return;}
   const rows=data||[];
   server.channels=rows;
