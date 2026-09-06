@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Patch revision: validates call access at the last safe moment before media acquisition.
 path = Path('src/main.js')
 text = path.read_text(encoding='utf-8')
 changed = False
