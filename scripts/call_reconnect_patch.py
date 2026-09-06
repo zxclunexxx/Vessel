@@ -9,6 +9,11 @@ def replace_once(old, new, label):
     global text, changed
     if new in text:
         return
+    # Later security hardening makes call Realtime topics private without changing the
+    # reconnect lifecycle. Treat that secured form as the already-applied target state.
+    secured_new = new.replace('supabase.channel(name)', 'supabase.channel(name,{config:{private:true}})')
+    if secured_new != new and secured_new in text:
+        return
     if old not in text:
         raise SystemExit(f'{label} anchor not found')
     text = text.replace(old, new, 1)
