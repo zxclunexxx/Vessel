@@ -8,6 +8,7 @@ let dbChannels = [];
 let voiceStream = null;
 let voiceRoom = null;
 let voiceChannelId = null;
+let voiceServerId = null;
 let voiceParticipants = [];
 const voicePeers = new Map();
 let callStream = null;
@@ -350,7 +351,7 @@ async function leaveVoiceRoom(){
   voiceRoom=null;
   voiceStream?.getTracks().forEach(track=>track.stop());voiceStream=null;
   for(const peerId of [...voicePeers.keys()])removeVoicePeer(peerId);
-  voiceParticipants=[];voiceChannelId=null;
+  voiceParticipants=[];voiceChannelId=null;voiceServerId=null;
   if(room&&supabase){try{await supabase.removeChannel(room);}catch{}}
   render();
 }
@@ -365,6 +366,7 @@ async function toggleVoiceRoom(user){
     const targetChannelId=activeChannelId;
     voiceStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
     voiceChannelId=targetChannelId;
+    voiceServerId=getActiveServer()?.dbId||null;
     room=supabase.channel(`voice-${targetChannelId}`,{config:{presence:{key:user.id}}});
     voiceRoom=room;
     room.on('broadcast',{event:'voice-signal'},({payload})=>handleVoiceSignal(user,payload).catch(error=>console.warn('Voice signal failed',error)));
@@ -713,10 +715,11 @@ function connectSupabaseRealtime(user) {
     supabase.channel(`vessel-friends-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friend_requests',filter:`receiver_id=eq.${user.id}`},()=>{window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),
     supabase.channel(`vessel-friend-requests-out-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friend_requests',filter:`sender_id=eq.${user.id}`},()=>{window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),
     supabase.channel(`vessel-friendships-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friendships',filter:`user_id=eq.${user.id}`},()=>{window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),
-    supabase.channel(`vessel-memberships-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'server_members'},payload=>{
+    supabase.channel(`vessel-memberships-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'server_members'},async payload=>{
       const row=payload.new?.server_id?payload.new:payload.old;
       if(!row)return;
       if(row.user_id===user.id){
+        if(payload.eventType==='DELETE'&&voiceStream&&voiceServerId===row.server_id)await leaveVoiceRoom();
         window.__vesselServersLoaded=false;
         syncSupabaseServers(user).then(()=>{
           const active=getActiveServer();
@@ -728,8 +731,9 @@ function connectSupabaseRealtime(user) {
         if(active?.dbId===row.server_id){window.__vesselMembersServerId=null;serverMembers=[];syncServerMembers(user,active);}
       }
     }).subscribe(),
-    supabase.channel(`vessel-channels-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'channels'},payload=>{
+    supabase.channel(`vessel-channels-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'channels'},async payload=>{
       const row=payload.new?.server_id?payload.new:payload.old;
+      if(payload.eventType==='DELETE'&&voiceStream&&row?.id===voiceChannelId)await leaveVoiceRoom();
       const active=getActiveServer();
       if(row?.server_id&&active?.dbId===row.server_id){active.__channelsLoaded=false;syncSupabaseChannels(active);}
     }).subscribe(),
@@ -778,6 +782,7 @@ function resetAuthenticatedRuntime() {
   for(const peerId of [...voicePeers.keys()])removeVoicePeer(peerId);
   voiceParticipants=[];
   voiceChannelId=null;
+  voiceServerId=null;
   incomingCall=null;
   callPeer=null;
   callPeerName='';
@@ -1109,6 +1114,7 @@ function render() {
       }
       if(action==='3'){
         if(!await vesselConfirm(`Удалить сервер «${server.name}»?`,'Каналы и сообщения этого сервера тоже будут удалены.'))return;
+        if(voiceStream&&voiceServerId===server.dbId)await leaveVoiceRoom();
         const {error}=await supabase.from('servers').delete().eq('id',server.dbId).eq('owner_id',user.id);
         if(error){vesselNotice(`Не удалось удалить сервер: ${error.message}`,'error');return;}
         window.__vesselServersLoaded=false; activeServerId=null; localStorage.removeItem('vesselActiveServerId'); activeServerIndex=0; activeChannelId=null; currentDm=null; activeDmId=null; dbChannels=[]; messages=[]; serverMembers=[]; window.__vesselMembersServerId=null;
@@ -1120,6 +1126,7 @@ function render() {
       return;
     }
     if(await vesselConfirm(`Выйти из сервера «${server.name}»?`)){
+      if(voiceStream&&voiceServerId===server.dbId)await leaveVoiceRoom();
       const {error}=await supabase.from('server_members').delete().eq('server_id',server.dbId).eq('user_id',user.id);
       if(error){vesselNotice(`Не удалось выйти из сервера: ${error.message}`,'error');return;}
       window.__vesselServersLoaded=false; activeServerId=null; localStorage.removeItem('vesselActiveServerId'); activeServerIndex=0; activeChannelId=null; currentDm=null; activeDmId=null; dbChannels=[]; messages=[]; serverMembers=[]; window.__vesselMembersServerId=null;
