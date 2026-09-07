@@ -15,8 +15,8 @@ Vessel uses batched autonomous sprint branches instead of treating every small f
 
 ## Last known stable main
 
-- Commit: `b285fc4ba9f01a03ee3e7bc1355e2330473ea4bc`
-- Release Gate run: `34161499648`
+- Commit: `a65d0f499f8519dd1c787fa5fbe3f133c7ac6668`
+- Release Gate run: `34162533485`
 - Fast Gate: verified green
 - Web build/deploy: verified green
 - Android debug APK: verified green and artifact uploaded
@@ -27,47 +27,44 @@ Vessel uses batched autonomous sprint branches instead of treating every small f
 - Auth email rate-limit resilience + production SMTP guide: merged as PR #6
 - UI Batch 2 Messaging + Social: merged as PR #7
 - UI Batch 3 Voice + Calls: merged as PR #8
+- UI Batch 4 Motion + Polish: merged as PR #9
 - Live Supabase `rtc-config`: ACTIVE and JWT-protected; real TURN relay still requires external TURN infrastructure and server-side secrets.
 
 ## Current sprint
 
-Branch: `autonomous/ui-motion-polish-batch`
+Branch: `autonomous/full-qa-hardening`
 
-UI Batch 4 Motion + Polish unifies Vessel interaction behavior without changing data access, authorization or RTC transport:
+Full QA & Release Hardening focuses on defects that appear at lifecycle, mobile, accessibility and release boundaries without changing backend authorization:
 
-1. Add context-aware transitions for channel, DM, Friends and RTC scene changes while avoiding animation on ordinary realtime rerenders.
-2. Add transform/opacity entrance motion to headers, content panes, composer and call/voice stages.
-3. Standardize hover and press feedback across primary actions, dialogs, attachments, social controls, call controls and utility buttons.
-4. Restrict hover-only effects to fine-pointer devices so touch interfaces do not retain sticky hover states.
-5. Upgrade modal presentation with a consistent glass highlight, backdrop entrance and spring-like card entrance.
-6. Present standard modals as bottom sheets on small mobile screens while leaving the dedicated incoming-call animation isolated.
-7. Replace overlapping notices with an accessible stacked toast system supporting info, success and error tones, manual dismiss and a lifetime indicator.
-8. Add a real mobile channel-drawer scrim that closes the drawer on tap and keeps body/drawer state synchronized across rerenders.
-9. Add safe-area spacing, `100dvh` sizing and larger mobile touch targets.
-10. Reduce expensive blur levels on small screens and add paint containment to expensive visual cards/tiles for a lighter rendering budget.
-11. Keep new animation transform/opacity oriented and disable Batch 4 motion under `prefers-reduced-motion`.
-12. Preserve the exact verified call ICE-recovery markers and all earlier UI batch markers.
-13. Extend the centralized Fast Gate from 31 to 32 checks with `ui_motion_polish_smoke_check.py`.
+1. Correct offline presence copy so `offline` / `не в сети` no longer renders as `В сети`.
+2. Harden logout, account-switch and failed-auth cleanup by stopping Web Audio speaking meters, call-duration UI timers and the RTC visual runtime ticker.
+3. Upgrade custom prompt/choice/confirm dialogs with `role=dialog`, `aria-modal`, universal Escape close, initial focus and focus restoration.
+4. Apply the same Escape, outside-click and focus-return lifecycle to the profile settings modal.
+5. Route channel/notification mobile navigation through one drawer-close function so the scrim and `body.mobile-drawer-open` state cannot remain stale after navigation.
+6. Clear drawer body/scrim state at render boundaries because render reconstructs the shell and implicitly closes the drawer.
+7. Replace the permanent global 500 ms RTC polling loop with a dynamic ticker that only exists while call/voice/reconnect runtime is active.
+8. Remove duplicate render cleanup introduced while hardening the drawer lifecycle.
+9. Preserve Electron release security invariants: context isolation, disabled Node integration, sandboxing, HTTPS-only external navigation and explicit permission handlers.
+10. Extend the centralized Fast Gate from 32 to 33 checks with `full_qa_hardening_smoke_check.py`.
 
 ## Current sprint verification
 
-- Autonomous Motion + Polish migration: passed.
-- Generated runtime is present in `src/main.js` under `VESSEL_UI_MOTION_POLISH_V1`.
-- Generated visual layer is present in `src/style.css` under `VESSEL_UI_MOTION_POLISH_V1`.
-- Existing 31 regression checks continue to pass, including social UI, voice/calls UI, voice reconnect, TURN-ready transport, call ICE restart and call-session cleanup.
-- Dedicated Motion + Polish regression check passes as part of the 32-check Fast Gate.
-- Pre-status sprint HEAD `7bd51edf33bddb73354444481aeec974aabaf618`: Fast Gate success.
-- JavaScript syntax: passed.
-- Locked dependency install: passed.
-- Dependency audit: passed.
-- Production build: passed.
-- No SQL, RLS, Supabase schema, policy, authentication or authorization changes are part of this batch.
-- A final Fast Gate on this status-updated sprint HEAD is required before PR.
+- First hardening batch: Fast Gate run `34163602290` passed with 33 checks, JavaScript syntax, locked dependency install, dependency audit and production build.
+- Interaction/performance generated runtime: autonomous verifier run `34163819717` passed before bot commit.
+- Final cleanup generated runtime: autonomous verifier run `34163968391` passed before bot commit `c2f35168d8fe631c1ebf2259a24d4afc3e528980`.
+- Dedicated hardening regression coverage checks runtime cleanup, dialog accessibility, mobile drawer lifecycle, idle RTC polling removal and Electron security invariants.
+- Existing social, DM, server, attachment, notification, voice reconnect, TURN-ready, call ICE restart, call-session cleanup and all four UI batch regression checks remain in the same Fast Gate suite.
+- No SQL, RLS, Supabase schema, policy, authentication or authorization changes are part of this sprint.
+- No service-role key, SMTP password, TURN shared secret or long-lived TURN credential is present in client runtime.
+- A final Fast Gate on the status-updated sprint HEAD is required before PR.
 - After PR Fast Gate, squash-merge and run exactly one Release Gate for Web, Android APK and Windows EXE.
 
-## Next stage
+## Remaining release QA / external validation
 
-Full QA and release hardening: two-account social/DM flows, channel/server lifecycle, call/voice recovery, responsive/device validation, artifact installation checks, accessibility pass and final production-readiness cleanup.
+- Real two-account end-to-end interaction still needs an actual two-session/device pass for friend request/accept/remove, DM send/read/reload, server membership/channel flows and realtime convergence.
+- Physical APK/EXE installation and microphone/camera permission behavior still need device-level validation after the final Release Gate artifacts are produced.
+- Actual TURN relay traffic cannot be claimed as tested until external TURN infrastructure and server-side credentials are available.
+- The web entrypoint still loads Supabase JS from a major-version CDN URL (`@supabase/supabase-js@2`); bundling or exact pin/SRI is a remaining supply-chain hardening follow-up and has not been changed in this sprint.
 
 ## Known blockers / external dependencies
 
