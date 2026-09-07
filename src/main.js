@@ -32,6 +32,7 @@ let incomingCall = null;
 let callMicEnabled = true;
 let callCameraEnabled = true;
 let callInviteTimer = null;
+let callDisconnectTimer = null;
 let activeServerIndex = 0;
 let activeServerId = localStorage.getItem('vesselActiveServerId') || null;
 let serversSyncRevision = 0;
@@ -836,6 +837,21 @@ async function flushLocalIceCandidates(user, peerId, video) {
   const candidates = localIceCandidates.splice(0);
   for (const candidate of candidates) await sendCallSignal(user, peerId, {type:'ice', candidate}, video);
 }
+function clearCallDisconnectTimer(){
+  if(callDisconnectTimer){clearTimeout(callDisconnectTimer);callDisconnectTimer=null;}
+}
+function scheduleCallDisconnectCleanup(connection){
+  if(connection!==callConnection||callDisconnectTimer)return;
+  const state=connection.connectionState;
+  const delay=state==='failed'?5000:8000;
+  callDisconnectTimer=setTimeout(async()=>{
+    callDisconnectTimer=null;
+    if(connection!==callConnection)return;
+    if(!['failed','disconnected'].includes(connection.connectionState))return;
+    vesselNotice('Связь со звонком прервалась. Попробуй позвонить снова.','error');
+    await endCall(false);
+  },delay);
+}
 function prepareCallConnection(user,peerId,video) {
   if (callConnection) return callConnection;
   callConnection=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
@@ -847,14 +863,11 @@ function prepareCallConnection(user,peerId,video) {
   callConnection.ontrack=e=>{remoteCallStream=e.streams[0];const el=document.querySelector('#remote-video');if(el){el.srcObject=remoteCallStream;el.play().catch(()=>{});} };
   const connection = callConnection;
   callConnection.onconnectionstatechange=()=>{
-    if(connection!==callConnection) return;
+    if(connection!==callConnection)return;
     const state=connection.connectionState;
-    if(['failed','closed'].includes(state)){endCall(false);return;}
-    if(state==='disconnected'){
-      setTimeout(()=>{
-        if(connection===callConnection && connection.connectionState==='disconnected') endCall(false);
-      },3000);
-    }
+    if(state==='connected'){clearCallDisconnectTimer();return;}
+    if(state==='closed'){clearCallDisconnectTimer();return;}
+    if(['failed','disconnected'].includes(state))scheduleCallDisconnectCleanup(connection);
   };
   if(callStream) callStream.getTracks().forEach(track=>callConnection.addTrack(track,callStream));
   return callConnection;
@@ -976,6 +989,7 @@ async function endCall(notify=true) {
   callOffer=null;
   callVideo=false;
   callAccepted=false;
+  clearCallDisconnectTimer();
   if(callInviteTimer){clearTimeout(callInviteTimer);callInviteTimer=null;}
   callMicEnabled=true;
   callCameraEnabled=true;
