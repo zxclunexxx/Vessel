@@ -47,6 +47,7 @@ required = [
     'let serversSyncRevision = 0;',
     'let socialSyncRevision = 0;',
     'let dmThreadsSyncRevision = 0;',
+    'let dmMessagesSyncRevision = 0;',
     'let notificationsSyncRevision = 0;',
     'callInviteTimer',
     'vessel-memberships-',
@@ -79,7 +80,7 @@ required = [
     'maxlength="32"',
     'const selected=getActiveServer();',
     "if(activeDmId||activeChannelId!==channelId||activeChannelKind!=='text')return;",
-    'if(savedUser?.id!==dmLoadUserId||activeDmId!==friendId)return;',
+    'if(savedUser?.id!==dmLoadUserId||revision!==dmMessagesSyncRevision||activeDmId!==friendId)return;',
 ]
 for item in required:
     if item not in main:
@@ -145,11 +146,15 @@ dm_load_start=main.find('async function loadDirectMessages(user, friendId)')
 if channel_load_start < 0 or dm_load_start < 0:
     raise SystemExit('Missing message loaders')
 channel_load=main[channel_load_start:channel_load_start+1200]
-dm_load=main[dm_load_start:dm_load_start+1600]
+dm_load=main[dm_load_start:dm_load_start+1800]
 if "if(activeDmId||activeChannelId!==channelId||activeChannelKind!=='text')return;" not in channel_load:
     raise SystemExit('Channel message loader must discard stale async responses')
-if 'if(savedUser?.id!==dmLoadUserId||activeDmId!==friendId)return;' not in dm_load:
-    raise SystemExit('Direct-message loader must discard stale async responses and stale authenticated sessions')
+if 'const revision=++dmMessagesSyncRevision;' not in dm_load:
+    raise SystemExit('Direct-message loader must revision-stamp each async load')
+if 'if(savedUser?.id!==dmLoadUserId||revision!==dmMessagesSyncRevision||activeDmId!==friendId)return;' not in dm_load:
+    raise SystemExit('Direct-message loader must discard stale responses, revisions and authenticated sessions')
+if "if(error){window.__vesselDmLoaded=false;" not in dm_load:
+    raise SystemExit('Direct-message loader must leave the cache retryable after a failed load')
 
 servers_start=main.find('async function syncSupabaseServers(user)')
 social_start=main.find('async function syncSocial(user)')
@@ -173,8 +178,8 @@ if 'revision!==notificationsSyncRevision' not in notifications_block:
 reset_start=main.find('function resetAuthenticatedRuntime()')
 if reset_start < 0:
     raise SystemExit('Missing authenticated runtime reset')
-reset_block=main[reset_start:reset_start+3200]
-for marker in ['serversSyncRevision++;','socialSyncRevision++;','dmThreadsSyncRevision++;','notificationsSyncRevision++;','window.__vesselNotificationsLoaded=false;']:
+reset_block=main[reset_start:reset_start+3400]
+for marker in ['serversSyncRevision++;','socialSyncRevision++;','dmThreadsSyncRevision++;','dmMessagesSyncRevision++;','notificationsSyncRevision++;','window.__vesselNotificationsLoaded=false;']:
     if marker not in reset_block:
         raise SystemExit(f'Authenticated reset does not invalidate async state: {marker}')
 

@@ -23,56 +23,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Authenticated runtime smoke check
-        run: python scripts/runtime_smoke_check_current.py
-      - name: Logout/session cleanup smoke check
-        run: python scripts/logout_session_smoke_check.py
-      - name: Realtime auth-session isolation smoke check
-        run: python scripts/realtime_session_smoke_check.py
-      - name: Private Realtime signaling security smoke check
-        run: python scripts/realtime_security_smoke_check.py
-      - name: DM history lifecycle smoke check
-        run: python scripts/dm_history_smoke_check.py
-      - name: DM identity update privilege smoke check
-        run: python scripts/dm_identity_security_smoke_check.py
-      - name: Friend request identity privilege smoke check
-        run: python scripts/friend_request_identity_security_smoke_check.py
-      - name: Friend request transition/notification smoke check
-        run: python scripts/friend_request_transition_notification_smoke_check.py
-      - name: Friend request retry lifecycle smoke check
-        run: python scripts/friend_request_retry_client_smoke_check.py
-      - name: Symmetric friendship delete smoke check
-        run: python scripts/friendship_symmetry_smoke_check.py
-      - name: Attachment upload context security smoke check
-        run: python scripts/attachment_upload_context_smoke_check.py
-      - name: Server owner membership invariant smoke check
-        run: python scripts/server_owner_membership_smoke_check.py
-      - name: Server ownership transfer smoke check
-        run: python scripts/server_ownership_transfer_smoke_check.py
-      - name: Fresh bootstrap server lifecycle smoke check
-        run: python scripts/schema_bootstrap_smoke_check.py
-      - name: Privileged Edge Function source smoke check
-        run: python scripts/edge_function_source_smoke_check.py
-      - name: Voice peer reconnect smoke check
-        run: python scripts/voice_peer_reconnect_smoke_check.py
-      - name: Voice controls wiring smoke check
-        run: python scripts/voice_controls_smoke_check.py
-      - name: Incoming call timeout lifecycle smoke check
-        run: python scripts/incoming_call_timeout_smoke_check.py
-      - name: Direct-call ICE restart recovery smoke check
-        run: python scripts/call_ice_restart_smoke_check.py
-      - name: Call recovery session cleanup smoke check
-        run: python scripts/call_session_cleanup_smoke_check.py
-      - name: Media context smoke check
-        run: python scripts/media_context_smoke_check.py
-      - name: Notification read race smoke check
-        run: python scripts/notification_read_smoke_check.py
-      - name: Server/channel async context smoke check
-        run: python scripts/server_context_smoke_check.py
-      - name: Message auth context smoke check
-        run: python scripts/message_auth_context_smoke_check.py
-      - name: Stale channel send smoke check
-        run: python scripts/channel_send_guard_smoke_check.py
+      - name: Fast smoke suite
+        run: python scripts/run_fast_smoke_checks.py
+      - name: Preserve Fast Gate diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fast-gate-diagnostics-${{ github.run_id }}
+          path: fast-gate-smoke.log
+          if-no-files-found: warn
+          retention-days: 7
       - name: JavaScript syntax check
         run: node --check src/main.js
       - name: Install locked dependencies
