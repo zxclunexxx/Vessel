@@ -24,6 +24,7 @@ checks = [
     'edge_function_source_smoke_check.py',
     'voice_peer_reconnect_smoke_check.py',
     'voice_controls_smoke_check.py',
+    'voice_turn_ready_smoke_check.py',
     'incoming_call_timeout_smoke_check.py',
     'call_ice_restart_smoke_check.py',
     'call_session_cleanup_smoke_check.py',
