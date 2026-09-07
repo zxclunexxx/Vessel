@@ -215,6 +215,24 @@ drop trigger if exists vessel_create_friendship_after_accept on public.friend_re
 create trigger vessel_create_friendship_after_accept after update of status on public.friend_requests
 for each row execute function public.vessel_create_friendship_on_accept();
 
+create or replace function public.vessel_delete_reverse_friendship()
+returns trigger
+language plpgsql
+security definer
+set search_path='public'
+as $$
+begin
+  delete from public.friendships
+  where user_id=old.friend_id and friend_id=old.user_id;
+  return old;
+end;
+$$;
+revoke all on function public.vessel_delete_reverse_friendship() from public,anon,authenticated;
+
+drop trigger if exists vessel_delete_reverse_friendship_after_delete on public.friendships;
+create trigger vessel_delete_reverse_friendship_after_delete after delete on public.friendships
+for each row execute function public.vessel_delete_reverse_friendship();
+
 create or replace function public.vessel_notify_friend_request()
 returns trigger
 language plpgsql
@@ -605,13 +623,49 @@ $$;
 revoke all on function private.can_read_vessel_file(text) from public,anon;
 grant execute on function private.can_read_vessel_file(text) to authenticated,service_role;
 
+create or replace function private.can_upload_vessel_file(object_name text)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path='pg_catalog','public','storage'
+as $$
+declare
+  parts text[];
+  uid uuid;
+  peer_uuid uuid;
+  channel_uuid uuid;
+begin
+  uid := (select auth.uid());
+  if uid is null then return false; end if;
+  parts := storage.foldername(object_name);
+  if coalesce(array_length(parts,1),0)<3 or parts[1]<>uid::text then return false; end if;
+  if parts[2]='dm' then
+    begin peer_uuid:=parts[3]::uuid; exception when others then return false; end;
+    return peer_uuid<>uid and exists(select 1 from public.friendships f where f.user_id=uid and f.friend_id=peer_uuid);
+  end if;
+  if parts[2]='channel' then
+    begin channel_uuid:=parts[3]::uuid; exception when others then return false; end;
+    return exists(
+      select 1 from public.channels c
+      left join public.server_members sm on sm.server_id=c.server_id and sm.user_id=uid
+      left join public.servers s on s.id=c.server_id
+      where c.id=channel_uuid and c.kind='text' and (sm.user_id is not null or s.owner_id=uid)
+    );
+  end if;
+  return false;
+end;
+$$;
+revoke all on function private.can_upload_vessel_file(text) from public,anon;
+grant execute on function private.can_upload_vessel_file(text) to authenticated,service_role;
+
 create policy "vessel files read for authorized context" on storage.objects for select to authenticated
 using(bucket_id='vessel-files' and private.can_read_vessel_file(name));
 create policy "users upload vessel files" on storage.objects for insert to authenticated
-with check(bucket_id='vessel-files' and (storage.foldername(name))[1]=(select auth.uid())::text);
+with check(bucket_id='vessel-files' and private.can_upload_vessel_file(name));
 create policy "users update vessel files" on storage.objects for update to authenticated
 using(bucket_id='vessel-files' and owner_id=(select auth.uid())::text)
-with check(bucket_id='vessel-files' and owner_id=(select auth.uid())::text);
+with check(bucket_id='vessel-files' and owner_id=(select auth.uid())::text and private.can_upload_vessel_file(name));
 create policy "users delete vessel files" on storage.objects for delete to authenticated
 using(bucket_id='vessel-files' and owner_id=(select auth.uid())::text);
 
