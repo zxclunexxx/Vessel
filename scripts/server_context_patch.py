@@ -4,9 +4,20 @@ path = Path('src/main.js')
 text = path.read_text(encoding='utf-8')
 changed = False
 
+APPLIED_MARKERS = {
+    'channel message auth-session guard': "if(savedUser?.id!==sessionUserId||activeDmId||activeChannelId!==channelId||activeChannelKind!=='text')return;",
+    'channel list auth/session object guard': 'if(savedUser?.id!==sessionUserId||!servers.includes(server))return;',
+    'server member list context guard': 'if(savedUser?.id!==user.id||server.dbId!==getActiveServer()?.dbId)return;',
+    'server member profile context guard': 'if(savedUser?.id!==user.id||server.dbId!==getActiveServer()?.dbId)return;',
+}
+
 
 def replace_once(old, new, label):
     global text, changed
+    marker = APPLIED_MARKERS.get(label)
+    if marker and marker in text:
+        print(f'{label}: already applied in newer query shape')
+        return
     if new in text:
         print(f'{label}: already applied')
         return
@@ -14,6 +25,7 @@ def replace_once(old, new, label):
         raise SystemExit(f'{label}: expected source or patched form not found')
     text = text.replace(old, new, 1)
     changed = True
+    print(f'{label}: applied')
 
 
 # Ignore message query results that were started by a previous authenticated user.
@@ -90,16 +102,21 @@ replace_once(
     'server member list context guard',
 )
 
-replace_once(
-    """    const result=await supabase.from('profiles').select('id,username,avatar_color,status').in('id',ids);
+# Because both server-member guards intentionally use the same semantic marker, only the
+# first occurrence can prove presence. Preserve the stricter final count check below.
+if text.count('if(savedUser?.id!==user.id||server.dbId!==getActiveServer()?.dbId)return;') >= 2:
+    print('server member profile context guard: already applied in newer query shape')
+else:
+    replace_once(
+        """    const result=await supabase.from('profiles').select('id,username,avatar_color,status').in('id',ids);
     if(result.error){console.warn('Member profiles failed',result.error);vesselNotice('Не удалось загрузить профили участников.','error');return;}
 """,
-    """    const result=await supabase.from('profiles').select('id,username,avatar_color,status').in('id',ids);
+        """    const result=await supabase.from('profiles').select('id,username,avatar_color,status').in('id',ids);
     if(savedUser?.id!==user.id||server.dbId!==getActiveServer()?.dbId)return;
     if(result.error){console.warn('Member profiles failed',result.error);vesselNotice('Не удалось загрузить профили участников.','error');return;}
 """,
-    'server member profile context guard',
-)
+        'server member profile context guard',
+    )
 
 required_markers = [
     "if(savedUser?.id!==sessionUserId||activeDmId||activeChannelId!==channelId||activeChannelKind!=='text')return;",
