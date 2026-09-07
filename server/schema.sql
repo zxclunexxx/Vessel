@@ -455,6 +455,26 @@ create policy "members can send channel messages" on public.messages for insert 
   )
 );
 
+create policy "authors can update own channel messages" on public.messages for update to authenticated using(
+  author_id=(select auth.uid()) and (
+    exists(select 1 from public.server_members m join public.channels c on c.server_id=m.server_id where c.id=messages.channel_id and m.user_id=(select auth.uid()))
+    or exists(select 1 from public.channels c join public.servers s on s.id=c.server_id where c.id=messages.channel_id and s.owner_id=(select auth.uid()))
+  )
+) with check(
+  author_id=(select auth.uid()) and (
+    exists(select 1 from public.server_members m join public.channels c on c.server_id=m.server_id where c.id=messages.channel_id and m.user_id=(select auth.uid()))
+    or exists(select 1 from public.channels c join public.servers s on s.id=c.server_id where c.id=messages.channel_id and s.owner_id=(select auth.uid()))
+  )
+);
+create policy "authors can delete own channel messages" on public.messages for delete to authenticated using(
+  author_id=(select auth.uid()) and (
+    exists(select 1 from public.server_members m join public.channels c on c.server_id=m.server_id where c.id=messages.channel_id and m.user_id=(select auth.uid()))
+    or exists(select 1 from public.channels c join public.servers s on s.id=c.server_id where c.id=messages.channel_id and s.owner_id=(select auth.uid()))
+  )
+);
+revoke update on table public.messages from authenticated;
+grant update (body, attachments, edited_at) on table public.messages to authenticated;
+
 create policy "friend requests participants can read" on public.friend_requests for select to authenticated using(sender_id=(select auth.uid()) or receiver_id=(select auth.uid()));
 create policy "users can send friend requests" on public.friend_requests for insert to authenticated with check(
   sender_id=(select auth.uid())
@@ -481,11 +501,14 @@ using(sender_id=(select auth.uid()) and status='pending');
 create policy "friends can read friendships" on public.friendships for select to authenticated using(user_id=(select auth.uid()) or friend_id=(select auth.uid()));
 create policy "friends can delete friendship links" on public.friendships for delete to authenticated using(user_id=(select auth.uid()) or friend_id=(select auth.uid()));
 
-create policy "dm participants can read" on public.direct_messages for select to authenticated using(sender_id=(select auth.uid()) or receiver_id=(select auth.uid()));
+create policy "dm participants can read" on public.direct_messages for select to authenticated using(
+  deleted_at is null and (sender_id=(select auth.uid()) or receiver_id=(select auth.uid()))
+);
 create policy "friends can send dms" on public.direct_messages for insert to authenticated with check(
   sender_id=(select auth.uid()) and exists(select 1 from public.friendships f where f.user_id=(select auth.uid()) and f.friend_id=direct_messages.receiver_id)
 );
 create policy "senders can update dms" on public.direct_messages for update to authenticated using(sender_id=(select auth.uid())) with check(sender_id=(select auth.uid()));
+create policy "senders can delete own dms" on public.direct_messages for delete to authenticated using(sender_id=(select auth.uid()));
 
 -- Direct-message routing/identity is immutable from the browser.
 -- Senders may edit content or soft-delete their own messages, but cannot retarget an existing row.
@@ -568,6 +591,7 @@ as $$
       max(dm.created_at) as last_message_at
     from public.direct_messages dm
     where auth.uid() is not null
+      and dm.deleted_at is null
       and (dm.sender_id = auth.uid() or dm.receiver_id = auth.uid())
     group by 1
   )
