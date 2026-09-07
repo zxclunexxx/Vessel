@@ -1,11 +1,16 @@
-name: Vessel Quality Gate
+name: Vessel Fast Gate
 
 on:
   workflow_dispatch:
+  workflow_call:
   push:
-    branches: [main]
+    branches:
+      - 'autonomous/**'
   pull_request:
     branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   quality:
