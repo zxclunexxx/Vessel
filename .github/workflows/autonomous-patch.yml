@@ -46,6 +46,8 @@ jobs:
           path: autonomous-patch.log
           if-no-files-found: warn
           retention-days: 7
+      - name: Verify generated behavior
+        run: python scripts/run_fast_smoke_checks.py
       - name: Check JavaScript syntax
         run: node --check src/main.js
       - name: Install locked dependencies
@@ -75,6 +77,7 @@ jobs:
             echo "Sprint branch advanced; rebasing attempt $attempt"
             git fetch --depth=20 origin "$GITHUB_REF_NAME"
             git rebase "origin/$GITHUB_REF_NAME"
+            python scripts/run_fast_smoke_checks.py
             node --check src/main.js
             npm ci
             npm audit --audit-level=high
