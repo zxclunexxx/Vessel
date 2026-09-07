@@ -15,8 +15,8 @@ Vessel uses batched autonomous sprint branches instead of treating every small f
 
 ## Last known stable main
 
-- Commit: `7e6207f62cad3a15c99136c925d392a3d4cc4e52`
-- Release Gate run: `34157439474`
+- Commit: `2bb0a6d8cd277cea0ed3fa1e876fda7085310501`
+- Release Gate run: `34159153052`
 - Fast Gate: verified green
 - Web build/deploy: verified green
 - Android debug APK: verified green and artifact uploaded
@@ -24,41 +24,45 @@ Vessel uses batched autonomous sprint branches instead of treating every small f
 - Friends / DM / realtime resilience: merged
 - Voice / calls / reconnect / TURN-ready transport architecture: merged
 - UI Batch 1 liquid-glass foundation: merged as PR #5
+- Auth email rate-limit resilience + production SMTP guide: merged as PR #6
 - Live Supabase `rtc-config`: ACTIVE and JWT-protected; real TURN relay still requires external TURN infrastructure and server-side secrets.
 
 ## Current sprint
 
-Branch: `autonomous/auth-email-resilience-batch`
+Branch: `autonomous/ui-messaging-social-batch`
 
-This focused auth batch addresses Supabase email quota failures before UI Batch 2:
+UI Batch 2 deepens the visual system without changing database access or social authorization rules:
 
-1. Translate Supabase Auth failures into stable Russian Vessel messages instead of exposing raw backend error strings.
-2. Recognize `over_email_send_rate_limit` / `email rate limit` explicitly.
-3. Apply a local registration cooldown after email quota or generic Auth 429 failures so repeated clicks do not hammer Auth endpoints.
-4. Keep login available while signup is cooling down.
-5. Restore the signup button automatically with a visible countdown.
-6. Preserve email confirmation rather than weakening account security to bypass delivery limits.
-7. Document a production custom-SMTP architecture in `docs/AUTH_EMAIL_SMTP.md`.
-8. Keep SMTP credentials exclusively in protected Supabase/provider configuration; never in frontend code, GitHub, APK or EXE.
-9. Require SPF, DKIM and DMARC/domain setup for production sending.
-10. Extend the centralized Fast Gate from 28 to 29 checks with `auth_email_resilience_smoke_check.py`.
+1. Upgrade Direct Message rows into compact identity cards with avatars, presence dots, status copy, selected-state depth and unread glow.
+2. Add loading skeletons and a designed empty state for the DM list.
+3. Turn the Friends page into a Vessel Social hub with ambient glass hero, friend/incoming/outgoing counters and a premium add-friend action.
+4. Restyle friends into floating glass cards with online/away/DND/offline presence indicators.
+5. Give incoming requests a warm signal accent and outgoing requests a violet pending accent.
+6. Standardize friend message/call/accept/remove controls as compact interactive action buttons.
+7. Add designed social loading skeletons and a first-use empty state.
+8. Give messages semantic `mine` styling while preserving existing mutation permissions and security checks.
+9. Improve message hover depth, avatar treatment, hidden-until-hover actions and attachment chips.
+10. Enhance the composer with a restrained ambient focus glow and gradient send control.
+11. Keep all animations transform/opacity-oriented and disable repeating social/unread animations under `prefers-reduced-motion`.
+12. Extend the centralized Fast Gate from 29 to 30 checks with `ui_messaging_social_smoke_check.py`.
 
 ## Current sprint verification
 
-- Autonomous auth migration: passed.
-- Generated auth runtime is present in `src/main.js` under `VESSEL_AUTH_EMAIL_RESILIENCE_V1`.
-- 29-check Fast Gate smoke suite: passed.
+- Autonomous visual migration: passed.
+- Generated runtime/UI is present in `src/main.js` and `src/style.css`.
+- `VESSEL_UI_MESSAGING_SOCIAL_V1` is isolated on top of the existing visual foundation.
+- 30-check Fast Gate smoke suite: passed on sprint HEAD before this status-only commit.
 - JavaScript syntax: passed.
 - Dependency audit: passed.
 - Production build: passed.
-- PR Fast Gate is required before merge.
-- After merge, exactly one Release Gate must verify Web, Android APK and Windows EXE.
+- No SQL, RLS or Supabase schema changes are part of this batch.
+- A final Fast Gate on the status-updated sprint HEAD is required before PR.
+- After PR Fast Gate, squash-merge and run exactly one Release Gate for Web, Android APK and Windows EXE.
 
 ## Next UI batches
 
-1. Messaging + Social: friend cards, DM rows, message grouping, composer polish, loading/empty/error states.
-2. Voice + Calls: participant cards, speaking indicators, audio/video stages, reconnect banners and floating call controls.
-3. Motion + Polish: transitions, microinteractions, ambient motion, mobile refinement, reduced-motion validation and performance cleanup.
+1. Voice + Calls: participant cards, speaking indicators, audio/video stages, reconnect banners and floating call controls.
+2. Motion + Polish: transitions, microinteractions, ambient motion, modal/toast polish, mobile refinement, reduced-motion validation and performance cleanup.
 
 ## Known blockers / external dependencies
 
