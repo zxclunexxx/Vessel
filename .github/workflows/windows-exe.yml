@@ -30,9 +30,29 @@ jobs:
       - name: Package Windows portable EXE
         run: npm run desktop:package
 
+      - name: Record EXE integrity and signing metadata
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem release -Filter *.exe | Select-Object -First 1
+          if (-not $exe) { throw 'Windows EXE not found' }
+          New-Item -ItemType Directory -Force release-metadata | Out-Null
+          $hash = (Get-FileHash -Algorithm SHA256 $exe.FullName).Hash.ToLowerInvariant()
+          "$hash  $($exe.Name)" | Set-Content release-metadata/windows-exe.sha256
+          $signature = Get-AuthenticodeSignature $exe.FullName
+          $productionReady = if ($signature.Status -eq 'Valid') { 'true' } else { 'false' }
+          @(
+            "commit=$env:GITHUB_SHA"
+            "artifact=$($exe.Name)"
+            "authenticode_status=$($signature.Status)"
+            "production_ready=$productionReady"
+          ) | Set-Content release-metadata/windows-exe-metadata.txt
+
       - name: Upload Windows EXE
         uses: actions/upload-artifact@v4
         with:
           name: Vessel-windows-exe
-          path: release/*.exe
+          path: |
+            release/*.exe
+            release-metadata/windows-exe.sha256
+            release-metadata/windows-exe-metadata.txt
           if-no-files-found: error
