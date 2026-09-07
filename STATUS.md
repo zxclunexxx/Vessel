@@ -15,45 +15,56 @@ Vessel uses batched autonomous sprint branches instead of treating every small f
 
 ## Last known stable main
 
-- Commit: `f4f741941ceaf8a9d9a6dfbd833904ebe3708e12`
-- Release Gate run: `34154604758`
+- Commit: `45bec0de790de2b5e6493f632ad674728a4a05c2`
+- Release Gate run: `34155608303`
 - Fast Gate: verified green
 - Web build/deploy: verified green
 - Android debug APK: verified green and artifact uploaded
 - Windows portable EXE: verified green and artifact uploaded
-- Friends → DM → Realtime resilience batch: merged as PR #3
+- Friends / DM / realtime resilience: merged
+- Voice / calls / reconnect / TURN-ready transport architecture: merged
+- Live Supabase `rtc-config`: ACTIVE and JWT-protected; real TURN relay still requires external TURN infrastructure and server-side secrets.
 
 ## Current sprint
 
-Branch: `autonomous/voice-turn-ready-batch`
+Branch: `autonomous/ui-foundation-shell-batch`
 
-The current batch hardens voice rooms and direct calls as one transport/recovery unit:
+UI Batch 1 establishes the Vessel visual identity without rewriting authenticated runtime behavior:
 
-1. Fetch authenticated RTC configuration through the `rtc-config` Edge Function.
-2. Keep browser code free of TURN shared secrets and long-lived TURN credentials.
-3. Generate short-lived coturn REST credentials when `TURN_URLS` and `TURN_SHARED_SECRET` are configured server-side.
-4. Fall back safely to STUN when TURN is not configured or RTC configuration cannot be fetched.
-5. Refresh ephemeral RTC configuration before ICE restarts.
-6. Attempt voice-peer ICE restart before destroying and recreating the peer connection.
-7. Use session-scoped exponential reconnect for call inbox and active call signaling.
-8. Accelerate RTC recovery when the browser reports that network connectivity returned.
-9. Cancel voice/call reconnect timers and cached RTC configuration on authenticated-session reset.
-10. Cover the batch with the dedicated `voice_turn_ready_smoke_check.py` in the centralized Fast Gate suite.
+1. Dark futuristic liquid-glass design tokens and shared visual constants.
+2. Ambient cyan/violet/magenta background lighting with a subtle texture layer.
+3. Floating glass shell surfaces for server rail, navigation, workspace and members.
+4. Server rail with soft lift/glow states and a luminous selected indicator.
+5. Channel navigation with clearer hierarchy, active rail and premium hover states.
+6. User card moved visually into the lower navigation flow as a compact dock.
+7. Workspace header/action controls, chat surface and composer aligned to the new identity.
+8. Auth, dialogs and toasts aligned to the same glass system.
+9. Responsive/mobile drawer behavior preserved.
+10. Keyboard `:focus-visible` feedback and `prefers-reduced-motion` support.
+11. Visual rules documented in `docs/UI_VISUAL_SYSTEM.md`.
+12. Dedicated `ui_foundation_shell_smoke_check.py` extends the centralized Fast Gate to 28 checks.
 
 ## Current sprint verification
 
-- Staging commit: `e02b1cb808205a8db8014bcb7a4f8a097708c11f`
-- Verified generated runtime commit: `e61f91bcb3fffbb89e7c35e149a56d7cb115cfca`
-- Autonomous migration application: passed
-- Generated Fast Gate suite: passed
-- JavaScript syntax: passed
-- Dependency audit: passed
-- Production build: passed
-- A normal Fast Gate is required on the final sprint HEAD before opening the PR.
+- Functional JavaScript runtime is unchanged by UI Batch 1.
+- Generated `src/style.css` foundation is present as an isolated `VESSEL_UI_FOUNDATION_SHELL_V1` override layer.
+- Autonomous migration application: passed.
+- Fast Gate smoke suite: passed.
+- JavaScript syntax: passed.
+- Dependency audit: passed.
+- Production build: passed.
+- PR Fast Gate is required before merge.
+- After merge, exactly one Release Gate must verify Web, Android APK and Windows EXE.
+
+## Next UI batches
+
+1. Messaging + Social: friend cards, DM rows, message grouping, composer polish, loading/empty/error states.
+2. Voice + Calls: participant cards, speaking indicators, audio/video stages, reconnect banners and floating call controls.
+3. Motion + Polish: transitions, microinteractions, ambient motion, mobile refinement, reduced-motion validation and performance cleanup.
 
 ## Known blockers / external dependencies
 
-- The application is TURN-ready, but actual relay traffic requires external TURN infrastructure plus Edge Function secrets `TURN_URLS` and `TURN_SHARED_SECRET` (optional `TURN_TTL_SECONDS` / `STUN_URLS`).
+- Actual TURN relay traffic requires external TURN infrastructure plus Edge Function secrets `TURN_URLS` and `TURN_SHARED_SECRET` (optional `TURN_TTL_SECONDS` / `STUN_URLS`).
 - No TURN secret or long-lived TURN credential may be committed to the repository or embedded in browser code.
 - Supabase Leaked Password Protection is an account/project Auth setting rather than an application-code patch; enabling it must not expose any secrets.
 
