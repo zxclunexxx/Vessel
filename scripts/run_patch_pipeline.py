@@ -20,6 +20,7 @@ preferred_order = [
     'voice_controls_patch.py',
     'call_reconnect_patch.py',
     'call_access_race_patch.py',
+    'call_network_loss_patch.py',
     'incoming_call_timeout_patch.py',
     'message_context_patch.py',
     'server_context_patch.py',
