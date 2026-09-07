@@ -1293,7 +1293,7 @@ function render() {
   const callInProgress=Boolean(callConnection||callStream);
   const activeDmIsFriend=Boolean(activeDmId&&friends.some(friend=>friend.id===activeDmId));
   const activeServer=getActiveServer();
-  const canManageChannel=Boolean(!friendsOpen&&!currentDm&&activeChannelId&&activeServer?.dbId&&activeServer.role==='owner');
+  const canManageChannel=Boolean(!friendsOpen&&!currentDm&&activeChannelId&&activeServer?.dbId&&['owner','moderator'].includes(activeServer.role));
   const callActions=callInProgress
     ? `<button id="toggle-call-mic" class="call-control" title="${callMicEnabled?'Выключить микрофон':'Включить микрофон'}">${callMicEnabled?'🎙':'🔇'}</button>${callVideo?`<button id="toggle-call-camera" class="call-control" title="${callCameraEnabled?'Выключить камеру':'Включить камеру'}">${callCameraEnabled?'📷':'🚫'}</button>`:''}<button id="end-call" class="hangup" title="Завершить звонок">☎</button>`
     : (!friendsOpen&&activeDmId&&activeDmIsFriend) ? `<button id="audio-call" title="Аудиозвонок">📞</button><button id="video-call" title="Видеозвонок">🎥</button>` : '';
@@ -1504,7 +1504,7 @@ function render() {
     if(!channelName)return;
     const server=getActiveServer();
     if(!supabase||!user.id||!server?.dbId){vesselNotice('Сначала выбери настоящий сервер.','error');return;}
-    if(server.role!=='owner'){vesselNotice('Создавать каналы может только владелец сервера.','error');return;}
+    if(!['owner','moderator'].includes(server.role)){vesselNotice('Создавать каналы могут владелец и модераторы сервера.','error');return;}
     if(serverChannels().some(channel=>channel.name.toLocaleLowerCase('ru-RU')===channelName.toLocaleLowerCase('ru-RU'))){vesselNotice('Канал с таким названием уже существует.','error');return;}
     const position=serverChannels().reduce((max,channel)=>Math.max(max,Number(channel.position)||0),-1)+1;
     const {data,error}=await supabase.from('channels').insert({server_id:server.dbId,name:channelName,kind,position}).select('id,name,kind,position').single();
@@ -1518,7 +1518,7 @@ function render() {
   document.querySelector('#voice-add').addEventListener('click', () => addChannel('voice'));
   document.querySelector('#channel-settings')?.addEventListener('click',async()=>{
     const server=getActiveServer();
-    if(!server?.dbId||server.role!=='owner'||!activeChannelId)return;
+    if(!server?.dbId||!['owner','moderator'].includes(server.role)||!activeChannelId)return;
     const channel=serverChannels().find(item=>item.id===activeChannelId);
     if(!channel)return;
     const action=await vesselChoice(`Канал «${channel.name}»`,[{label:'Переименовать',value:'1'},{label:'Удалить',value:'2',danger:true}]);
