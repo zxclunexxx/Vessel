@@ -1,5 +1,5 @@
 -- Vessel database bootstrap snapshot (PostgreSQL / Supabase)
--- Updated 2026-09-05 to match the secured production schema.
+-- Updated 2026-09-07 to match the secured production schema.
 -- Intended for a fresh Supabase project. Existing deployments should use migrations.
 
 create extension if not exists pgcrypto;
@@ -147,7 +147,7 @@ $$;
 revoke all on function private.is_server_member(uuid) from public,anon;
 grant execute on function private.is_server_member(uuid) to authenticated,service_role;
 
--- Profile + starter server are created only from a real Auth user.
+-- Profile is created from a real Auth user; servers are explicit user actions.
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
@@ -162,7 +162,6 @@ begin
   end if;
   insert into public.profiles(id,username,email)
   values(new.id,desired_username,coalesce(new.email,new.id::text||'@vessel.local'));
-  insert into public.servers(name,icon,owner_id) values('Мой Vessel','V',new.id);
   return new;
 end;
 $$;
