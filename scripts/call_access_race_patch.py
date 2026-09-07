@@ -47,14 +47,25 @@ replace_once(
     'outgoing call friendship/context guard',
 )
 
-replace_once(
-    """async function acceptIncomingCall(user) {
+# Incoming-call timeout hardening may insert clearIncomingCallTimer() after the invite
+# snapshot. The access/session markers are the invariant this patch owns, so treat that
+# newer shape as already applied instead of depending on one exact block layout.
+acceptance_markers = [
+    'const access=await verifyDirectMessageAccess(user,invite.from);',
+    'if(incomingCall!==invite||savedUser?.id!==user.id)return;',
+    "await sendCallInvite(user,invite.from,{type:'decline'});",
+]
+if all(marker in text for marker in acceptance_markers):
+    print('incoming call acceptance friendship guard: already applied')
+else:
+    replace_once(
+        """async function acceptIncomingCall(user) {
   if (!incomingCall || !user?.id) return;
   const invite=incomingCall; incomingCall=null; callPeer=invite.from; callPeerName=invite.name; callVideo=invite.video; callAccepted=true; callMicEnabled=true; callCameraEnabled=invite.video;
   activeDmId=invite.from; currentDm=invite.name; friendsOpen=false; window.__vesselDmLoaded=false;
   try {
 """,
-    """async function acceptIncomingCall(user) {
+        """async function acceptIncomingCall(user) {
   if (!incomingCall || !user?.id) return;
   const invite=incomingCall;
   const access=await verifyDirectMessageAccess(user,invite.from);
@@ -69,8 +80,8 @@ replace_once(
   activeDmId=invite.from; currentDm=invite.name; friendsOpen=false; window.__vesselDmLoaded=false;
   try {
 """,
-    'incoming call acceptance friendship guard',
-)
+        'incoming call acceptance friendship guard',
+    )
 
 for marker in [
     'if(callInboxChannel!==inbox||savedUser?.id!==user.id)return;',
