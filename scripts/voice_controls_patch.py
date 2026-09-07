@@ -46,11 +46,20 @@ replace_once(
     'voice deafen action',
 )
 
-replace_once(
-    """  voiceParticipants=[];\n  voiceChannelId=null;\n  voiceServerId=null;\n  incomingCall=null;\n""",
-    """  voiceParticipants=[];\n  voiceChannelId=null;\n  voiceServerId=null;\n  voiceDeafened=false;\n  incomingCall=null;\n""",
-    'voice auth reset',
-)
+# Newer call lifecycle hardening inserts clearIncomingCallTimer() between the voice
+# reset and incomingCall=null. Treat either shape as an already-applied voice reset.
+auth_reset_markers = [
+    """  voiceDeafened=false;\n  incomingCall=null;\n""",
+    """  voiceDeafened=false;\n  clearIncomingCallTimer();\n  incomingCall=null;\n""",
+]
+if any(marker in text for marker in auth_reset_markers):
+    print('voice auth reset already applied')
+else:
+    replace_once(
+        """  voiceParticipants=[];\n  voiceChannelId=null;\n  voiceServerId=null;\n  incomingCall=null;\n""",
+        """  voiceParticipants=[];\n  voiceChannelId=null;\n  voiceServerId=null;\n  voiceDeafened=false;\n  incomingCall=null;\n""",
+        'voice auth reset',
+    )
 
 replace_once(
     """<button id=\"mute-voice\" class=\"join-voice ${!friendsOpen&&voiceStream&&voiceChannelId===activeChannelId?'':'hidden'}\">${voiceStream?.getAudioTracks()[0]?.enabled===false?'🔇':'🎙'}</button><button id=\"search-button\"""",
