@@ -34,6 +34,8 @@ jobs:
         run: python scripts/friend_request_identity_security_smoke_check.py
       - name: Friend request transition/notification smoke check
         run: python scripts/friend_request_transition_notification_smoke_check.py
+      - name: Symmetric friendship delete smoke check
+        run: python scripts/friendship_symmetry_smoke_check.py
       - name: Server owner membership invariant smoke check
         run: python scripts/server_owner_membership_smoke_check.py
       - name: Media context smoke check
