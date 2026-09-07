@@ -1746,7 +1746,25 @@ function render() {
     vesselNotice('Профиль сохранён.','success');
     render();
   });
-  document.querySelector('#logout').addEventListener('click', async () => { if(supabase) await supabase.auth.signOut().catch(()=>{}); localStorage.removeItem('vesselUser'); localStorage.removeItem('vesselToken'); location.reload(); });
+  const logoutButton=document.querySelector('#logout');
+  logoutButton.addEventListener('click', async () => {
+    if(!supabase){vesselNotice('Сервис авторизации временно недоступен.','error');return;}
+    logoutButton.disabled=true;
+    try{
+      const {error}=await supabase.auth.signOut();
+      if(error){vesselNotice('Не удалось выйти из аккаунта. Попробуй ещё раз.','error');return;}
+      if(savedUser){
+        const staleChannels=resetAuthenticatedRuntime();
+        render();
+        cleanupAuthenticatedChannels(staleChannels).catch(cleanupError=>console.warn('Logout cleanup failed',cleanupError));
+      }
+    }catch(error){
+      console.warn('Logout failed',error);
+      vesselNotice('Не удалось выйти из аккаунта. Попробуй ещё раз.','error');
+    }finally{
+      if(logoutButton.isConnected)logoutButton.disabled=false;
+    }
+  });
   document.querySelector('#accept-call')?.addEventListener('click', () => acceptIncomingCall(user));
   document.querySelector('#reject-call')?.addEventListener('click', () => rejectIncomingCall(user));
   document.querySelectorAll('.channel:not(.dm)').forEach(channel=>channel.addEventListener('click',async()=>{
