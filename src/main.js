@@ -88,15 +88,23 @@ function vesselNotice(message,type='info') {
   requestAnimationFrame(()=>toast.classList.add('show'));
   setTimeout(()=>{toast.classList.remove('show');setTimeout(()=>toast.remove(),180);},3200);
 }
-function vesselListDialog(title,items=[],emptyText='Ничего нет') {
+function vesselListDialog(title,items=[],emptyText='Ничего нет',onSelect=null) {
   const overlay=document.createElement('div');
   overlay.className='modal vessel-dialog';
-  const content=items.length?items.map(item=>`<div class="dialog-list-item"><div><b>${escapeHtml(item.title||'')}</b>${item.meta?`<time>${escapeHtml(item.meta)}</time>`:''}</div><p>${escapeHtml(item.body||'')}</p></div>`).join(''):`<div class="dialog-empty">${escapeHtml(emptyText)}</div>`;
+  const content=items.length?items.map((item,index)=>{
+    const inner=`<div><b>${escapeHtml(item.title||'')}</b>${item.meta?`<time>${escapeHtml(item.meta)}</time>`:''}</div><p>${escapeHtml(item.body||'')}</p>`;
+    return onSelect&&item.value?`<button type="button" class="dialog-list-item dialog-list-button" data-list-index="${index}">${inner}</button>`:`<div class="dialog-list-item">${inner}</div>`;
+  }).join(''):`<div class="dialog-empty">${escapeHtml(emptyText)}</div>`;
   overlay.innerHTML=`<div class="modal-card dialog-card dialog-list-card"><button class="modal-close" data-dialog-close>×</button><h2>${escapeHtml(title)}</h2><div class="dialog-list">${content}</div></div>`;
   document.body.appendChild(overlay);
   const close=()=>overlay.remove();
   overlay.querySelector('[data-dialog-close]').addEventListener('click',close);
   overlay.addEventListener('click',event=>{if(event.target===overlay)close();});
+  overlay.querySelectorAll('[data-list-index]').forEach(button=>button.addEventListener('click',async()=>{
+    const item=items[Number(button.dataset.listIndex)];
+    close();
+    try{await onSelect?.(item);}catch(error){console.warn('Dialog list action failed',error);vesselNotice('Не удалось открыть уведомление.','error');}
+  }));
 }
 function vesselCodeDialog(title,code) {
   const overlay=document.createElement('div');
@@ -1556,7 +1564,36 @@ function render() {
     vesselListDialog(`Поиск: ${query.trim()}`,found.map(message=>({title:message.name,body:message.text,meta:message.time})), 'Совпадений не найдено');
   });
   document.querySelector('#notifications').addEventListener('click', async () => {
-    vesselListDialog('Уведомления',notifications.map(item=>({title:item.title||'Vessel',body:item.body||'',meta:item.created_at?new Date(item.created_at).toLocaleString('ru-RU'):''})), 'Уведомлений пока нет');
+    const openNotification=async selected=>{
+      const notification=notifications.find(item=>item.id===selected?.value);
+      if(!notification)return;
+      if(notification.type==='direct_message'&&notification.data?.sender_id){
+        const peerId=notification.data.sender_id;
+        let peer=dmThreads.find(item=>item.id===peerId)||friends.find(item=>item.id===peerId)||null;
+        if(!peer&&supabase){
+          const {data:profile,error}=await supabase.from('profiles').select('id,username,avatar_color,status').eq('id',peerId).maybeSingle();
+          if(error)console.warn('Notification peer profile load failed',error);else peer=profile;
+        }
+        currentDm=peer?.username||'Пользователь';
+        activeDmId=peerId;
+        friendsOpen=false;
+        window.__vesselDmLoaded=false;
+        document.querySelector('.channels')?.classList.remove('mobile-open');
+        render();
+        await markDirectMessageNotificationsRead(user,peerId);
+        return;
+      }
+      if(notification.type==='friend_request'){
+        friendsOpen=true;
+        currentDm=null;
+        activeDmId=null;
+        dmMessages=[];
+        window.__vesselDmLoaded=false;
+        document.querySelector('.channels')?.classList.remove('mobile-open');
+        render();
+      }
+    };
+    vesselListDialog('Уведомления',notifications.map(item=>({title:item.title||'Vessel',body:item.body||'',meta:item.created_at?new Date(item.created_at).toLocaleString('ru-RU'):'',value:['direct_message','friend_request'].includes(item.type)?item.id:null})), 'Уведомлений пока нет',openNotification);
     const sessionUserId=user.id;
     const unreadIds=notifications.filter(item=>!item.read_at&&item.type!=='direct_message').map(item=>item.id).filter(Boolean);
     if(unreadIds.length&&supabase&&sessionUserId){
