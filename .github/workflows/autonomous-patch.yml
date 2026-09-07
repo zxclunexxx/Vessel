@@ -2,18 +2,30 @@ name: Apply Vessel autonomous patch
 
 on:
   push:
+    branches:
+      - 'autonomous/**'
     paths:
       - 'scripts/*.py'
       - '.github/workflows/autonomous-patch.yml'
 
 permissions:
   contents: write
-  actions: write
+
+concurrency:
+  group: autonomous-patch-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   patch-and-build:
     runs-on: ubuntu-latest
     steps:
+      - name: Refuse protected/default branch mutation
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_NAME" != autonomous/* ]]; then
+            echo "Autonomous patching is restricted to autonomous/* branches" >&2
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -33,27 +45,25 @@ jobs:
         run: npm audit --audit-level=high
       - name: Verify production build
         run: npm run build
-      - name: Commit verified changes
-        id: commit
+      - name: Commit verified generated changes to sprint branch
         run: |
           if git diff --quiet -- src/main.js src/style.css server/schema.sql; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No generated changes"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/main.js src/style.css server/schema.sql
-          git commit -m "Apply verified Vessel UX and reliability improvements"
+          git commit -m "Apply verified Vessel autonomous patch"
           pushed=false
           for attempt in 1 2 3; do
-            if git push; then
+            if git push origin "HEAD:$GITHUB_REF_NAME"; then
               pushed=true
               break
             fi
-            echo "main advanced during autonomous patch; rebasing attempt $attempt"
-            git fetch --depth=20 origin main
-            git rebase origin/main
+            echo "Sprint branch advanced; rebasing attempt $attempt"
+            git fetch --depth=20 origin "$GITHUB_REF_NAME"
+            git rebase "origin/$GITHUB_REF_NAME"
             node --check src/main.js
             npm ci
             npm audit --audit-level=high
@@ -63,13 +73,3 @@ jobs:
             echo "Unable to push verified autonomous patch after retries" >&2
             exit 1
           fi
-          echo "changed=true" >> "$GITHUB_OUTPUT"
-      - name: Dispatch checks and distributable builds for generated commit
-        if: steps.commit.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh workflow run quality.yml --ref main
-          gh workflow run web-pages.yml --ref main
-          gh workflow run android-apk.yml --ref main
-          gh workflow run windows-exe.yml --ref main
