@@ -39,6 +39,7 @@ checks = [
     'ui_voice_calls_smoke_check.py',
     'ui_motion_polish_smoke_check.py',
     'full_qa_hardening_smoke_check.py',
+    'release_candidate_integrity_smoke_check.py',
 ]
 
 missing = [name for name in checks if not (scripts_dir / name).is_file()]
