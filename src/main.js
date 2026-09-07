@@ -602,6 +602,24 @@ async function toggleVoiceRoom(user,reconnecting=false){
   try{
     const targetChannelId=activeChannelId;
     const targetServerId=getActiveServer()?.dbId||null;
+    if(!targetServerId){vesselNotice('Сначала выбери сервер для голосового канала.','error');return;}
+    const [membershipResult,ownershipResult]=await Promise.all([
+      supabase.from('server_members').select('server_id').eq('server_id',targetServerId).eq('user_id',user.id).maybeSingle(),
+      supabase.from('servers').select('id').eq('id',targetServerId).eq('owner_id',user.id).maybeSingle()
+    ]);
+    if(savedUser?.id!==user.id||activeChannelId!==targetChannelId||getActiveServer()?.dbId!==targetServerId)return;
+    if(membershipResult.error||ownershipResult.error){
+      if(!reconnecting)vesselNotice('Не удалось проверить доступ к голосовому каналу. Попробуй ещё раз.','error');
+      return;
+    }
+    if(!membershipResult.data&&!ownershipResult.data){
+      if(reconnecting)cancelVoiceReconnect();
+      if(!reconnecting)vesselNotice('У тебя больше нет доступа к этому серверу.','error');
+      window.__vesselServersLoaded=false;
+      activeChannelId=null;activeChannelName='нет каналов';activeChannelKind='text';
+      await syncSupabaseServers(user);
+      return;
+    }
     const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
     if(savedUser?.id!==user.id||activeChannelId!==targetChannelId||activeChannelKind!=='voice'||getActiveServer()?.dbId!==targetServerId||callConnection||callStream||incomingCall){
       stream.getTracks().forEach(track=>track.stop());

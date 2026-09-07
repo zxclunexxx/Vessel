@@ -11,6 +11,9 @@ required = [
     'audio.muted=voiceDeafened;',
     'const uniqueParticipants=new Map();',
     'voiceParticipants=[...uniqueParticipants.values()];',
+    "supabase.from('server_members').select('server_id')",
+    "supabase.from('servers').select('id').eq('id',targetServerId).eq('owner_id',user.id)",
+    "if(!membershipResult.data&&!ownershipResult.data)",
 ]
 
 missing = [marker for marker in required if marker not in text]
