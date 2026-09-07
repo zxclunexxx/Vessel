@@ -49,6 +49,8 @@ create table if not exists public.channels (
   constraint channels_name_length_check check (char_length(trim(name)) between 1 and 80)
 );
 create index if not exists channels_server_id_idx on public.channels(server_id);
+create unique index if not exists channels_server_name_lower_uidx
+on public.channels(server_id,lower(trim(name)));
 
 create table if not exists public.messages (
   id uuid primary key default gen_random_uuid(),
