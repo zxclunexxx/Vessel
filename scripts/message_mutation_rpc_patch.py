@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Compatibility shim for repositories where vessel_dm_threads() predates soft-delete filtering.
 schema_path = Path('server/schema.sql')
 schema = schema_path.read_text(encoding='utf-8')
 
