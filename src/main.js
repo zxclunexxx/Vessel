@@ -232,16 +232,18 @@ async function findAndRequestFriend(user) {
   if(!target){vesselNotice('Пользователь не найден.','error');return;}
   if(target.self||target.id===user.id){vesselNotice('Нельзя добавить самого себя.','error');return;}
   if(friends.some(friend=>friend.id===target.id)){vesselNotice(`${target.username} уже у тебя в друзьях.`);return;}
-  const {data:existing,error:existingError}=await supabase.from('friend_requests').select('id,status,sender_id,receiver_id').or(`and(sender_id.eq.${user.id},receiver_id.eq.${target.id}),and(sender_id.eq.${target.id},receiver_id.eq.${user.id})`).limit(1);
+  const {data:existing,error:existingError}=await supabase.from('friend_requests').select('id,status,sender_id,receiver_id').or(`and(sender_id.eq.${user.id},receiver_id.eq.${target.id}),and(sender_id.eq.${target.id},receiver_id.eq.${user.id})`);
   if(existingError){vesselNotice('Не удалось проверить заявки в друзья.','error');return;}
-  const request=existing?.[0];
-  if(request?.status==='pending'){
-    vesselNotice(request.receiver_id===user.id ? `${target.username} уже отправил тебе заявку. Открой раздел «Друзья».` : 'Заявка уже отправлена.');
+  const requests=existing||[];
+  const pending=requests.find(request=>request.status==='pending');
+  if(pending){
+    vesselNotice(pending.receiver_id===user.id ? `${target.username} уже отправил тебе заявку. Открой раздел «Друзья».` : 'Заявка уже отправлена.');
     return;
   }
+  const outgoing=requests.find(request=>request.sender_id===user.id&&request.receiver_id===target.id);
   let sendError=null;
-  if(request&&request.sender_id===user.id&&['declined','cancelled'].includes(request.status)){
-    const result=await supabase.from('friend_requests').update({status:'pending',updated_at:new Date().toISOString()}).eq('id',request.id).eq('sender_id',user.id).in('status',['declined','cancelled']);
+  if(outgoing&&['accepted','declined','cancelled'].includes(outgoing.status)){
+    const result=await supabase.from('friend_requests').update({status:'pending',updated_at:new Date().toISOString()}).eq('id',outgoing.id).eq('sender_id',user.id).in('status',['accepted','declined','cancelled']);
     sendError=result.error;
   }else{
     const result=await supabase.from('friend_requests').insert({sender_id:user.id,receiver_id:target.id,status:'pending'});
