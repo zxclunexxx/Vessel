@@ -498,6 +498,11 @@ with check(
 create policy "senders can cancel pending friend requests" on public.friend_requests for delete to authenticated
 using(sender_id=(select auth.uid()) and status='pending');
 
+-- Friend-request routing/identity is immutable from the browser.
+-- Participants may transition status and refresh updated_at, but cannot retarget an existing request.
+revoke update on table public.friend_requests from anon, authenticated;
+grant update (status, updated_at) on table public.friend_requests to authenticated;
+
 create policy "friends can read friendships" on public.friendships for select to authenticated using(user_id=(select auth.uid()) or friend_id=(select auth.uid()));
 create policy "friends can delete friendship links" on public.friendships for delete to authenticated using(user_id=(select auth.uid()) or friend_id=(select auth.uid()));
 
