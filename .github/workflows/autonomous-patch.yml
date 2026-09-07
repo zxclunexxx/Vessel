@@ -48,6 +48,14 @@ jobs:
           retention-days: 7
       - name: Verify generated behavior
         run: python scripts/run_fast_smoke_checks.py
+      - name: Preserve generated Fast Gate diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-fast-gate-diagnostics-${{ github.run_id }}
+          path: fast-gate-smoke.log
+          if-no-files-found: warn
+          retention-days: 7
       - name: Check JavaScript syntax
         run: node --check src/main.js
       - name: Install locked dependencies
