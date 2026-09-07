@@ -38,6 +38,14 @@ let callDisconnectTimer = null;
 let callInitiator = false;
 let callIceRestartAttempts = 0;
 let callIceRestartInFlight = false;
+let rtcConfigCache = null;
+let rtcConfigUserId = null;
+let rtcConfigExpiresAt = 0;
+let rtcConfigPromise = null;
+let callInboxReconnectTimer = null;
+let callInboxReconnectAttempt = 0;
+let callSignalReconnectTimer = null;
+let callSignalReconnectAttempt = 0;
 let activeServerIndex = 0;
 let activeServerId = localStorage.getItem('vesselActiveServerId') || null;
 let serversSyncRevision = 0;
@@ -435,12 +443,113 @@ async function deleteOwnMessage(user,messageId){
   render();
 }
 
+const RTC_FALLBACK_ICE_SERVERS = [
+  {urls:['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302']}
+];
+function resetRtcConfiguration(){
+  rtcConfigCache=null;
+  rtcConfigUserId=null;
+  rtcConfigExpiresAt=0;
+  rtcConfigPromise=null;
+}
+function normaliseRtcIceServers(rows){
+  if(!Array.isArray(rows))return [];
+  const output=[];
+  for(const row of rows.slice(0,8)){
+    if(!row||typeof row!=='object')continue;
+    const rawUrls=Array.isArray(row.urls)?row.urls:[row.urls];
+    const urls=rawUrls.map(value=>String(value||'').trim()).filter(value=>/^(stun|turn|turns):/i.test(value));
+    if(!urls.length)continue;
+    const hasRelay=urls.some(value=>/^turns?:/i.test(value));
+    if(hasRelay&&(!row.username||!row.credential))continue;
+    const entry={urls:urls.length===1?urls[0]:urls};
+    if(hasRelay){entry.username=String(row.username);entry.credential=String(row.credential);}
+    output.push(entry);
+  }
+  return output;
+}
+async function resolveRtcConfiguration(user,{force=false}={}){
+  const userId=user?.id||null;
+  const fallback={iceServers:RTC_FALLBACK_ICE_SERVERS,iceCandidatePoolSize:2};
+  if(!supabase||!userId||savedUser?.id!==userId)return fallback;
+  const now=Date.now();
+  if(!force&&rtcConfigCache&&rtcConfigUserId===userId&&rtcConfigExpiresAt>now+60000)return rtcConfigCache;
+  if(rtcConfigPromise&&rtcConfigUserId===userId)return rtcConfigPromise;
+  rtcConfigUserId=userId;
+  rtcConfigPromise=(async()=>{
+    try{
+      const {data,error}=await supabase.functions.invoke('rtc-config');
+      if(savedUser?.id!==userId)return fallback;
+      if(error)throw error;
+      const iceServers=normaliseRtcIceServers(data?.iceServers);
+      if(!iceServers.length)throw new Error('RTC_CONFIG_EMPTY');
+      const parsedExpiry=Date.parse(String(data?.expires_at||''));
+      rtcConfigCache={iceServers,iceCandidatePoolSize:2};
+      rtcConfigExpiresAt=Number.isFinite(parsedExpiry)?parsedExpiry:Date.now()+5*60*1000;
+      return rtcConfigCache;
+    }catch(error){
+      console.warn('RTC configuration fallback active',error);
+      rtcConfigCache=fallback;
+      rtcConfigExpiresAt=Date.now()+60*1000;
+      return fallback;
+    }finally{
+      rtcConfigPromise=null;
+    }
+  })();
+  return rtcConfigPromise;
+}
+function clearVoicePeerDisconnectTimer(state){
+  if(state?.disconnectTimer){clearTimeout(state.disconnectTimer);state.disconnectTimer=null;}
+}
+async function attemptVoicePeerIceRestart(user,peerId,state){
+  if(!user?.id||!state||voicePeers.get(peerId)!==state||!state.initiator||state.iceRestartInFlight)return false;
+  const pc=state.pc;
+  if(!['failed','disconnected'].includes(pc.connectionState)||state.iceRestartAttempts>=2)return false;
+  state.iceRestartAttempts+=1;
+  state.iceRestartInFlight=true;
+  try{
+    const rtcConfiguration=await resolveRtcConfiguration(user,{force:true});
+    if(savedUser?.id!==user.id||voicePeers.get(peerId)!==state||!voiceRoom||!voiceStream)return false;
+    pc.setConfiguration?.(rtcConfiguration);
+    pc.restartIce?.();
+    const offer=await pc.createOffer({iceRestart:true});
+    if(savedUser?.id!==user.id||voicePeers.get(peerId)!==state||!voiceRoom||!voiceStream)return false;
+    await pc.setLocalDescription(offer);
+    await sendVoiceSignal(user,peerId,{type:'offer',description:{type:pc.localDescription.type,sdp:pc.localDescription.sdp},restart:true});
+    console.info(`Voice ICE restart attempt ${state.iceRestartAttempts} sent for ${peerId}`);
+    return true;
+  }catch(error){
+    console.warn('Voice ICE restart failed',error);
+    return false;
+  }finally{
+    state.iceRestartInFlight=false;
+  }
+}
+function scheduleVoicePeerRecovery(user,peerId,state){
+  if(!user?.id||!state||voicePeers.get(peerId)!==state||state.disconnectTimer)return;
+  if(!['failed','disconnected'].includes(state.pc.connectionState))return;
+  const canRestart=state.initiator&&state.iceRestartAttempts<2;
+  const delay=canRestart?(state.pc.connectionState==='failed'?750:2200):(state.initiator?8000:12000);
+  state.disconnectTimer=setTimeout(async()=>{
+    state.disconnectTimer=null;
+    if(savedUser?.id!==user.id||voicePeers.get(peerId)!==state||!voiceRoom||!voiceStream)return;
+    if(!['failed','disconnected'].includes(state.pc.connectionState))return;
+    if(state.initiator&&state.iceRestartAttempts<2){
+      await attemptVoicePeerIceRestart(user,peerId,state);
+      if(voicePeers.get(peerId)===state&&['failed','disconnected'].includes(state.pc.connectionState))scheduleVoicePeerRecovery(user,peerId,state);
+      return;
+    }
+    removeVoicePeer(peerId);
+    scheduleVoicePeerReconnect(user,peerId);
+  },delay);
+}
 function removeVoicePeer(peerId) {
   const state=voicePeers.get(peerId);
   if(!state)return;
+  voicePeers.delete(peerId);
+  clearVoicePeerDisconnectTimer(state);
   try{state.pc.close();}catch{}
   state.audio?.remove();
-  voicePeers.delete(peerId);
 }
 function cancelVoicePeerReconnect(peerId){
   const timer=voicePeerReconnectTimers.get(peerId);
@@ -482,8 +591,10 @@ async function ensureVoicePeer(user,peerId,initiator=false){
   if(!user?.id||!peerId||peerId===user.id)return null;
   let state=voicePeers.get(peerId);
   if(state)return state;
-  const pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
-  state={pc,pending:[],audio:null};
+  const rtcConfiguration=await resolveRtcConfiguration(user);
+  if(savedUser?.id!==user.id||!voiceRoom||!voiceStream)return null;
+  const pc=new RTCPeerConnection(rtcConfiguration);
+  state={pc,pending:[],audio:null,initiator:!!initiator,iceRestartAttempts:0,iceRestartInFlight:false,disconnectTimer:null};
   voicePeers.set(peerId,state);
   voiceStream?.getAudioTracks().forEach(track=>pc.addTrack(track,voiceStream));
   pc.onicecandidate=event=>{if(event.candidate)sendVoiceSignal(user,peerId,{type:'ice',candidate:event.candidate}).catch(()=>{});};
@@ -494,18 +605,13 @@ async function ensureVoicePeer(user,peerId,initiator=false){
     audio.srcObject=event.streams[0];audio.play().catch(()=>{});
   };
   pc.onconnectionstatechange=()=>{
+    if(pc.connectionState==='connected'){clearVoicePeerDisconnectTimer(state);state.iceRestartAttempts=0;state.iceRestartInFlight=false;}
     if(pc.connectionState==='connected'){cancelVoicePeerReconnect(peerId);return;}
-    if(['failed','closed'].includes(pc.connectionState)){
-      removeVoicePeer(peerId);
-      scheduleVoicePeerReconnect(user,peerId);
+    if(pc.connectionState==='closed'){
+      if(voicePeers.get(peerId)===state){removeVoicePeer(peerId);scheduleVoicePeerReconnect(user,peerId);}
       return;
     }
-    if(pc.connectionState==='disconnected')setTimeout(()=>{
-      if(voicePeers.get(peerId)?.pc===pc&&pc.connectionState==='disconnected'){
-        removeVoicePeer(peerId);
-        scheduleVoicePeerReconnect(user,peerId);
-      }
-    },5000);
+    if(['failed','disconnected'].includes(pc.connectionState))scheduleVoicePeerRecovery(user,peerId,state);
   };
   if(initiator){
     try{
@@ -816,18 +922,35 @@ async function ensureCallInbox(user) {
       console.warn(`Call inbox ${status}; reconnecting`);
       callInboxChannel=null;
       if(supabase)void supabase.removeChannel(inbox).catch(error=>console.warn('Call inbox cleanup failed',error));
-      setTimeout(()=>{
-        if(savedUser?.id===user.id&&!callInboxChannel)ensureCallInbox(savedUser).catch(retryError=>console.warn('Call inbox reconnect failed',retryError));
-      },1000);
+      if(savedUser?.id===user.id&&!callInboxChannel)scheduleCallInboxReconnect(savedUser);
     });
   } catch (error) {
     console.warn('Call inbox failed', error);
     if(callInboxChannel===inbox)callInboxChannel=null;
     if(supabase){try{await supabase.removeChannel(inbox);}catch{}}
-    setTimeout(()=>{if(savedUser?.id===user.id&&!callInboxChannel)ensureCallInbox(savedUser).catch(retryError=>console.warn('Call inbox retry failed',retryError));},3000);
+    if(savedUser?.id===user.id&&!callInboxChannel)scheduleCallInboxReconnect(user);
     return null;
   }
+  if(callInboxChannel===inbox)cancelCallInboxReconnect();
   return callInboxChannel===inbox?inbox:callInboxChannel;
+}
+function cancelCallInboxReconnect(){
+  if(callInboxReconnectTimer){clearTimeout(callInboxReconnectTimer);callInboxReconnectTimer=null;}
+  callInboxReconnectAttempt=0;
+}
+function scheduleCallInboxReconnect(user,immediate=false){
+  if(!user?.id||savedUser?.id!==user.id||callInboxReconnectTimer)return;
+  callInboxReconnectAttempt=Math.min(callInboxReconnectAttempt+1,6);
+  const delay=immediate?0:Math.min(1000*(2**(callInboxReconnectAttempt-1)),15000);
+  const sessionUserId=user.id;
+  callInboxReconnectTimer=setTimeout(()=>{
+    callInboxReconnectTimer=null;
+    if(savedUser?.id!==sessionUserId||callInboxChannel)return;
+    ensureCallInbox(savedUser).catch(retryError=>{
+      console.warn('Call inbox reconnect failed',retryError);
+      if(savedUser?.id===sessionUserId&&!callInboxChannel)scheduleCallInboxReconnect(savedUser);
+    });
+  },delay);
 }
 async function ensureCallChannel(user, peerId) {
   if (!supabase || !user?.id || !peerId) return null;
@@ -849,18 +972,39 @@ async function ensureCallChannel(user, peerId) {
       console.warn(`Call signaling ${status}; reconnecting`);
       callChannel=null;
       if(supabase)void supabase.removeChannel(room).catch(error=>console.warn('Call signaling cleanup failed',error));
-      setTimeout(()=>{
-        if(savedUser?.id===user.id&&callPeer===peerId&&callConnection&&!callChannel){
-          ensureCallChannel(savedUser,peerId).catch(error=>console.warn('Call signaling reconnect failed',error));
-        }
-      },1000);
+      if(savedUser?.id===user.id&&callPeer===peerId&&callConnection&&!callChannel)scheduleCallSignalReconnect(savedUser,peerId);
     });
   }catch(error){
     if(callChannel===room)callChannel=null;
     if(supabase)await supabase.removeChannel(room).catch(()=>{});
     throw error;
   }
+  if(callChannel===room)cancelCallSignalReconnect();
   return room;
+}
+function cancelCallSignalReconnect(){
+  if(callSignalReconnectTimer){clearTimeout(callSignalReconnectTimer);callSignalReconnectTimer=null;}
+  callSignalReconnectAttempt=0;
+}
+function scheduleCallSignalReconnect(user,peerId,immediate=false){
+  if(!user?.id||!peerId||savedUser?.id!==user.id||callPeer!==peerId||!callConnection||callSignalReconnectTimer)return;
+  callSignalReconnectAttempt=Math.min(callSignalReconnectAttempt+1,6);
+  const delay=immediate?0:Math.min(750*(2**(callSignalReconnectAttempt-1)),12000);
+  const sessionUserId=user.id;
+  callSignalReconnectTimer=setTimeout(()=>{
+    callSignalReconnectTimer=null;
+    if(savedUser?.id!==sessionUserId||callPeer!==peerId||!callConnection||callChannel)return;
+    ensureCallChannel(savedUser,peerId).then(async room=>{
+      if(!room||savedUser?.id!==sessionUserId||callPeer!==peerId||!callConnection)return;
+      cancelCallSignalReconnect();
+      if(callInitiator&&callAccepted&&['failed','disconnected'].includes(callConnection.connectionState)){
+        await attemptCallIceRestart(callConnection,savedUser,peerId,callVideo);
+      }
+    }).catch(error=>{
+      console.warn('Call signaling reconnect failed',error);
+      if(savedUser?.id===sessionUserId&&callPeer===peerId&&callConnection&&!callChannel)scheduleCallSignalReconnect(savedUser,peerId);
+    });
+  },delay);
 }
 async function sendCallSignal(user,peerId,signal,video) {
   const room=await ensureCallChannel(user,peerId);
@@ -886,6 +1030,9 @@ async function attemptCallIceRestart(connection,user,peerId,video){
   callIceRestartAttempts+=1;
   callIceRestartInFlight=true;
   try{
+    const rtcConfiguration=await resolveRtcConfiguration(user,{force:true});
+    if(connection!==callConnection||!callAccepted||!callInitiator)return false;
+    connection.setConfiguration?.(rtcConfiguration);
     connection.restartIce?.();
     const offer=await connection.createOffer({iceRestart:true});
     if(connection!==callConnection||!callAccepted||!callInitiator)return false;
@@ -919,9 +1066,14 @@ function scheduleCallDisconnectCleanup(connection,user,peerId,video){
     await endCall(false);
   },delay);
 }
-function prepareCallConnection(user,peerId,video) {
+async function prepareCallConnection(user,peerId,video) {
   if (callConnection) return callConnection;
-  callConnection=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+  const sessionUserId=user?.id||null;
+  if(!sessionUserId||savedUser?.id!==sessionUserId||callPeer!==peerId)return null;
+  const rtcConfiguration=await resolveRtcConfiguration(user);
+  if(savedUser?.id!==sessionUserId||callPeer!==peerId)return null;
+  if(callConnection)return callConnection;
+  callConnection=new RTCPeerConnection(rtcConfiguration);
   callConnection.onicecandidate=e=>{
     if (!e.candidate) return;
     if (callAccepted) sendCallSignal(user,peerId,{type:'ice',candidate:e.candidate},video).catch(error=>console.warn('Call ICE send failed',error));
@@ -954,7 +1106,7 @@ async function handleCallSignal(user,peerId,signal,video) {
       }
       callStream=signalStream;
     }
-    callVideo=!!video; prepareCallConnection(user,peerId,!!video); await callConnection.setRemoteDescription(signal.description);
+    callVideo=!!video; if(!await prepareCallConnection(user,peerId,!!video))return; await callConnection.setRemoteDescription(signal.description);
     for(const candidate of pendingIceCandidates) await callConnection.addIceCandidate(candidate); pendingIceCandidates=[];
     const answer=await callConnection.createAnswer(); await callConnection.setLocalDescription(answer); await sendCallSignal(user,peerId,{type:'answer',description:answer},video); render(); return;
   }
@@ -979,7 +1131,7 @@ async function startCall(video,user) {
       return;
     }
     callStream=mediaStream;
-    prepareCallConnection(user,peerId,!!video);
+    if(!await prepareCallConnection(user,peerId,!!video))throw new Error('CALL_RTC_CONFIGURATION_STALE');
     const offer=await callConnection.createOffer();
     await callConnection.setLocalDescription(offer);
     callOffer=serialiseDescription(callConnection.localDescription);
@@ -1039,6 +1191,7 @@ async function rejectIncomingCall(user) {
   render();
 }
 async function endCall(notify=true) {
+  cancelCallSignalReconnect();
   const user=savedUser;
   const peer=callPeer;
   const room=callChannel;
@@ -1094,6 +1247,24 @@ function toggleCallCamera() {
   callCameraEnabled=track.enabled;
   render();
 }
+async function recoverRtcAfterNetworkReturn(){
+  const user=savedUser;
+  if(!user?.id)return;
+  scheduleCallInboxReconnect(user,true);
+  if(callPeer&&callConnection)scheduleCallSignalReconnect(user,callPeer,true);
+  for(const [peerId,state] of voicePeers){
+    if(['failed','disconnected'].includes(state.pc.connectionState)){
+      clearVoicePeerDisconnectTimer(state);
+      scheduleVoicePeerRecovery(user,peerId,state);
+    }
+  }
+  if(voiceReconnectContext&&!voiceRoom&&!voiceStream){
+    const {channelId,serverId}=voiceReconnectContext;
+    if(voiceReconnectTimer){clearTimeout(voiceReconnectTimer);voiceReconnectTimer=null;}
+    scheduleVoiceReconnect(user,channelId,serverId);
+  }
+}
+window.addEventListener('online',()=>{recoverRtcAfterNetworkReturn().catch(error=>console.warn('RTC network recovery failed',error));});
 
 let servers = [{ id: 'add-server', icon: '+', name: 'Добавить сервер', add: true }];
 
@@ -1288,6 +1459,11 @@ let authStateSyncTimer = null;
 
 function resetAuthenticatedRuntime() {
   clearDataRealtimeRecovery();
+  cancelVoiceReconnect();
+  cancelAllVoicePeerReconnects();
+  cancelCallInboxReconnect();
+  cancelCallSignalReconnect();
+  resetRtcConfiguration();
   dmMessagesSyncRevision++;
   const channels=[...(window.__vesselRealtimeChannels||[]),voiceRoom,callChannel,callInboxChannel].filter(Boolean);
   window.__vesselRealtimeChannels=null;
