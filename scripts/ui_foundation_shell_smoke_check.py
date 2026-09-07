@@ -17,6 +17,7 @@ required = [
     '.chat-head {',
     '.composer:focus-within {',
     'button:focus-visible,',
+    'transition: transform var(--v-normal) var(--v-ease-spring);',
     '.channels.mobile-open { transform: translateX(0); }',
     '@media (prefers-reduced-motion: reduce)',
 ]
@@ -26,6 +27,9 @@ if missing:
 
 if style.count('/* VESSEL_UI_FOUNDATION_SHELL_V1 */') != 1:
     raise SystemExit('Vessel UI foundation marker must be unique')
+
+if 'var(--normal, 220ms)' in style:
+    raise SystemExit('Legacy mobile motion fallback bypasses the shared --v-normal token')
 
 if 'animation-iteration-count: 1!important;' not in style:
     raise SystemExit('Reduced-motion override must stop repeated animations')
