@@ -35,6 +35,9 @@ let callCameraEnabled = true;
 let callInviteTimer = null;
 let incomingCallTimer = null;
 let callDisconnectTimer = null;
+let callInitiator = false;
+let callIceRestartAttempts = 0;
+let callIceRestartInFlight = false;
 let activeServerIndex = 0;
 let activeServerId = localStorage.getItem('vesselActiveServerId') || null;
 let serversSyncRevision = 0;
@@ -863,14 +866,42 @@ function clearIncomingCallTimer(){
 function clearCallDisconnectTimer(){
   if(callDisconnectTimer){clearTimeout(callDisconnectTimer);callDisconnectTimer=null;}
 }
-function scheduleCallDisconnectCleanup(connection){
+async function attemptCallIceRestart(connection,user,peerId,video){
+  if(connection!==callConnection||!callAccepted||!callInitiator||callIceRestartInFlight)return false;
+  if(!['failed','disconnected'].includes(connection.connectionState))return true;
+  if(callIceRestartAttempts>=2)return false;
+  callIceRestartAttempts+=1;
+  callIceRestartInFlight=true;
+  try{
+    connection.restartIce?.();
+    const offer=await connection.createOffer({iceRestart:true});
+    if(connection!==callConnection||!callAccepted||!callInitiator)return false;
+    await connection.setLocalDescription(offer);
+    callOffer=serialiseDescription(connection.localDescription);
+    await sendCallSignal(user,peerId,{type:'offer',description:callOffer,restart:true},video);
+    console.info(`Call ICE restart attempt ${callIceRestartAttempts} sent`);
+    return true;
+  }catch(error){
+    console.warn('Call ICE restart failed',error);
+    return false;
+  }finally{
+    callIceRestartInFlight=false;
+  }
+}
+function scheduleCallDisconnectCleanup(connection,user,peerId,video){
   if(connection!==callConnection||callDisconnectTimer)return;
   const state=connection.connectionState;
-  const delay=state==='failed'?5000:8000;
+  const canRestart=callInitiator&&callAccepted&&callIceRestartAttempts<2;
+  const delay=canRestart?(state==='failed'?1200:2500):(callInitiator?10000:20000);
   callDisconnectTimer=setTimeout(async()=>{
     callDisconnectTimer=null;
     if(connection!==callConnection)return;
     if(!['failed','disconnected'].includes(connection.connectionState))return;
+    if(callInitiator&&callAccepted&&callIceRestartAttempts<2){
+      await attemptCallIceRestart(connection,user,peerId,video);
+      if(connection===callConnection&&['failed','disconnected'].includes(connection.connectionState))scheduleCallDisconnectCleanup(connection,user,peerId,video);
+      return;
+    }
     vesselNotice('Связь со звонком прервалась. Попробуй позвонить снова.','error');
     await endCall(false);
   },delay);
@@ -926,7 +957,7 @@ async function startCall(video,user) {
     if(savedUser?.id!==user.id||activeDmId!==peerId)return;
     if(voiceStream)await leaveVoiceRoom();
     if(savedUser?.id!==user.id||activeDmId!==peerId)return;
-    callPeer=peerId; callPeerName=currentDm||'Пользователь'; callVideo=!!video; callAccepted=false; callOffer=null; localIceCandidates=[]; callMicEnabled=true; callCameraEnabled=!!video;
+    callPeer=peerId; callPeerName=currentDm||'Пользователь'; callVideo=!!video; callAccepted=false; callOffer=null; localIceCandidates=[]; callMicEnabled=true; callCameraEnabled=!!video; callInitiator=true; callIceRestartAttempts=0; callIceRestartInFlight=false;
     const mediaStream=await navigator.mediaDevices.getUserMedia({audio:true,video:!!video});
     const accessAfterMedia=await verifyDirectMessageAccess(user,peerId,{notify:false});
     if(savedUser?.id!==user.id||activeDmId!==peerId||callPeer!==peerId||incomingCall||accessAfterMedia!==true){
@@ -964,7 +995,7 @@ async function acceptIncomingCall(user) {
     render();
     return;
   }
-  incomingCall=null; callPeer=invite.from; callPeerName=invite.name; callVideo=invite.video; callAccepted=true; callMicEnabled=true; callCameraEnabled=invite.video;
+  incomingCall=null; callPeer=invite.from; callPeerName=invite.name; callVideo=invite.video; callAccepted=true; callMicEnabled=true; callCameraEnabled=invite.video; callInitiator=false; callIceRestartAttempts=0; callIceRestartInFlight=false;
   activeDmId=invite.from; currentDm=invite.name; friendsOpen=false; window.__vesselDmLoaded=false;
   try {
     if(voiceStream)await leaveVoiceRoom();
@@ -1013,6 +1044,9 @@ async function endCall(notify=true) {
   callOffer=null;
   callVideo=false;
   callAccepted=false;
+  callInitiator=false;
+  callIceRestartAttempts=0;
+  callIceRestartInFlight=false;
   clearCallDisconnectTimer();
   clearIncomingCallTimer();
   if(callInviteTimer){clearTimeout(callInviteTimer);callInviteTimer=null;}
