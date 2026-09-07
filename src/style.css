@@ -557,7 +557,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
     z-index: 30;
     border-radius: 22px;
     transform: translateX(-115%);
-    transition: transform var(--normal, 220ms) var(--v-ease-spring);
+    transition: transform var(--v-normal) var(--v-ease-spring);
     box-shadow: 22px 0 70px rgba(0,0,0,.54), var(--v-shadow-panel);
   }
   .channels.mobile-open { transform: translateX(0); }
