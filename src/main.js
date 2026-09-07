@@ -289,11 +289,33 @@ async function syncDmThreads(user) {
 async function syncNotifications(user) {
   if (!supabase || !user?.id || window.__vesselNotificationsLoaded) return;
   const revision=++notificationsSyncRevision;
-  const {data,error}=await supabase.from('notifications').select('id,type,title,body,data,read_at,created_at').eq('user_id',user.id).order('created_at',{ascending:false}).limit(30);
+  const {data,error}=await supabase.from('notifications').select('id,type,title,body,data,read_at,created_at').eq('user_id',user.id).order('created_at',{ascending:false}).limit(100);
   if(savedUser?.id!==user.id||revision!==notificationsSyncRevision)return;
   if(error){console.warn('Notification sync failed',error);vesselNotice('Не удалось загрузить уведомления.','error');return;}
   notifications=data||[]; window.__vesselNotificationsLoaded=true;
   if (document.querySelector('#app')) render();
+}
+function unreadDirectMessageCount(peerId) {
+  if(!peerId)return 0;
+  return notifications.filter(item=>!item.read_at&&item.type==='direct_message'&&item.data?.sender_id===peerId).length;
+}
+async function markDirectMessageNotificationsRead(user,peerId,notificationId=null) {
+  if(!supabase||!user?.id||!peerId)return;
+  const sessionUserId=user.id;
+  if(savedUser?.id!==sessionUserId)return;
+  const localUnread=notifications.filter(item=>!item.read_at&&item.type==='direct_message'&&item.data?.sender_id===peerId&&(!notificationId||item.id===notificationId));
+  if(notificationId&&!localUnread.length)return;
+  const readAt=new Date().toISOString();
+  let query=supabase.from('notifications').update({read_at:readAt}).eq('user_id',sessionUserId).eq('type','direct_message').is('read_at',null);
+  const result=notificationId
+    ? await query.eq('id',notificationId).select('id')
+    : await query.contains('data',{sender_id:peerId}).select('id');
+  if(savedUser?.id!==sessionUserId)return;
+  if(result.error){console.warn('DM notification read update failed',result.error);return;}
+  const updatedIds=new Set((result.data||[]).map(row=>row.id));
+  if(!updatedIds.size)return;
+  notifications=notifications.map(item=>updatedIds.has(item.id)&&!item.read_at?{...item,read_at:readAt}:item);
+  render();
 }
 async function loadDirectMessages(user, friendId) {
   if (!supabase || !user?.id || !friendId) return;
@@ -1047,12 +1069,16 @@ function connectSupabaseRealtime(user) {
       render();
     }).subscribe(),
     supabase.channel(`vessel-notifications-${user.id}`)
-      .on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},async payload=>{
         if(savedUser?.id!==user.id)return;
         const row=payload.new;
         notificationsSyncRevision++;
         window.__vesselNotificationsLoaded=true;
         notifications=[row,...notifications.filter(item=>item.id!==row.id)];
+        if(row?.type==='direct_message'&&row.data?.sender_id===activeDmId&&!friendsOpen){
+          await markDirectMessageNotificationsRead(user,activeDmId,row.id);
+          return;
+        }
         render();
       })
       .on('postgres_changes',{event:'UPDATE',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},payload=>{
@@ -1387,7 +1413,7 @@ function render() {
     ? `<button id="toggle-call-mic" class="call-control" title="${callMicEnabled?'Выключить микрофон':'Включить микрофон'}">${callMicEnabled?'🎙':'🔇'}</button>${callVideo?`<button id="toggle-call-camera" class="call-control" title="${callCameraEnabled?'Выключить камеру':'Включить камеру'}">${callCameraEnabled?'📷':'🚫'}</button>`:''}<button id="end-call" class="hangup" title="Завершить звонок">☎</button>`
     : (!friendsOpen&&activeDmId&&activeDmIsFriend) ? `<button id="audio-call" title="Аудиозвонок">📞</button><button id="video-call" title="Видеозвонок">🎥</button>` : '';
   const dmList=dmThreads.length
-    ? dmThreads.map(thread=>`<button class="channel dm ${activeDmId===thread.id?'active':''}" data-dm-id="${thread.id}" data-dm="${escapeHtml(thread.username)}"><div class="mini-avatar" style="background:${thread.avatar_color||'#8b7cff'}">${(thread.username||'?')[0].toUpperCase()}</div> ${escapeHtml(thread.username)} <em></em></button>`).join('')
+    ? dmThreads.map(thread=>{const unread=unreadDirectMessageCount(thread.id);return `<button class="channel dm ${activeDmId===thread.id?'active':''}" data-dm-id="${thread.id}" data-dm="${escapeHtml(thread.username)}"><div class="mini-avatar" style="background:${thread.avatar_color||'#8b7cff'}">${(thread.username||'?')[0].toUpperCase()}</div> ${escapeHtml(thread.username)} ${unread?`<em class="dm-unread" title="Непрочитанных: ${unread}">${unread>99?'99+':unread}</em>`:''}</button>`;}).join('')
     : `<div class="dm-empty">Пока нет личных чатов</div>`;
   const membersList=serverMembers.length
     ? `<div class="members-title">УЧАСТНИКИ — ${serverMembers.length}</div>${serverMembers.map(member=>`<div class="member online"><div class="avatar" style="background:${escapeHtml(member.avatar_color||'#8b7cff')}">${escapeHtml(member.username[0]?.toUpperCase()||'?')}</div><span>${escapeHtml(member.username)}<small>${member.role==='owner'?'Создатель':member.role==='moderator'?'Модератор':escapeHtml(statusLabel(member.status))}</small></span>${activeServer?.role==='owner'&&member.role!=='owner'?`<button class="member-manage" data-manage-member="${member.id}" title="Управление участником">•••</button>`:'<i></i>'}</div>`).join('')}`
@@ -1532,7 +1558,7 @@ function render() {
   document.querySelector('#notifications').addEventListener('click', async () => {
     vesselListDialog('Уведомления',notifications.map(item=>({title:item.title||'Vessel',body:item.body||'',meta:item.created_at?new Date(item.created_at).toLocaleString('ru-RU'):''})), 'Уведомлений пока нет');
     const sessionUserId=user.id;
-    const unreadIds=notifications.filter(item=>!item.read_at).map(item=>item.id).filter(Boolean);
+    const unreadIds=notifications.filter(item=>!item.read_at&&item.type!=='direct_message').map(item=>item.id).filter(Boolean);
     if(unreadIds.length&&supabase&&sessionUserId){
       const readAt=new Date().toISOString();
       const {data:updated,error}=await supabase.from('notifications').update({read_at:readAt}).eq('user_id',sessionUserId).in('id',unreadIds).is('read_at',null).select('id');
@@ -1698,7 +1724,7 @@ function render() {
       window.__vesselMembersServerId=null;serverMembers=[];await syncServerMembers(user,server);render();
     }
   }));
-  document.querySelectorAll('[data-dm]').forEach(button=>button.addEventListener('click',()=>{currentDm=button.dataset.dm;activeDmId=button.dataset.dmId||null;friendsOpen=false;window.__vesselDmLoaded=false;render();}));
+  document.querySelectorAll('[data-dm]').forEach(button=>button.addEventListener('click',async()=>{currentDm=button.dataset.dm;activeDmId=button.dataset.dmId||null;friendsOpen=false;window.__vesselDmLoaded=false;render();if(activeDmId)await markDirectMessageNotificationsRead(user,activeDmId);}));
   document.querySelectorAll('[data-attachment-path]').forEach(button=>button.addEventListener('click',()=>openAttachment(button.dataset.attachmentPath)));
   document.querySelectorAll('[data-edit-message]').forEach(button=>button.addEventListener('click',()=>editOwnMessage(user,button.dataset.editMessage)));
   document.querySelectorAll('[data-delete-message]').forEach(button=>button.addEventListener('click',()=>deleteOwnMessage(user,button.dataset.deleteMessage)));
