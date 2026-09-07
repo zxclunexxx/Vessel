@@ -919,9 +919,9 @@ function prepareCallConnection(user,peerId,video) {
   callConnection.onconnectionstatechange=()=>{
     if(connection!==callConnection)return;
     const state=connection.connectionState;
-    if(state==='connected'){clearCallDisconnectTimer();return;}
+    if(state==='connected'){clearCallDisconnectTimer();callIceRestartAttempts=0;callIceRestartInFlight=false;return;}
     if(state==='closed'){clearCallDisconnectTimer();return;}
-    if(['failed','disconnected'].includes(state))scheduleCallDisconnectCleanup(connection);
+    if(['failed','disconnected'].includes(state))scheduleCallDisconnectCleanup(connection,user,peerId,video);
   };
   if(callStream) callStream.getTracks().forEach(track=>callConnection.addTrack(track,callStream));
   return callConnection;
