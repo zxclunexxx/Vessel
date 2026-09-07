@@ -1793,7 +1793,25 @@ function render() {
     const memberId=button.dataset.manageMember;
     const member=serverMembers.find(item=>item.id===memberId);
     if(!member)return;
-    const action=await vesselChoice(`Участник ${member.username}`,[{label:'Сделать участником',value:'1'},{label:'Сделать модератором',value:'2'},{label:'Исключить из сервера',value:'3',danger:true}]);
+    const action=await vesselChoice(`Участник ${member.username}`,[{label:'Сделать участником',value:'1'},{label:'Сделать модератором',value:'2'},{label:'Передать владение сервером',value:'4',danger:true},{label:'Исключить из сервера',value:'3',danger:true}]);
+    if(action==='4'){
+      if(!await vesselConfirm(`Передать сервер пользователю ${member.username}?`,'Ты перестанешь быть владельцем и станешь обычным участником.'))return;
+      const serverId=server.dbId;
+      const {data,error}=await supabase.rpc('vessel_transfer_server_ownership',{target_server:serverId,target_owner:memberId});
+      if(error||data?.ok!==true){vesselNotice(`Не удалось передать сервер: ${error?.message||'неизвестная ошибка'}`,'error');return;}
+      window.__vesselServersLoaded=false;
+      window.__vesselMembersServerId=null;
+      serverMembers=[];
+      await syncSupabaseServers(user);
+      const refreshedServer=getActiveServer();
+      if(refreshedServer?.dbId===serverId){
+        refreshedServer.__channelsLoaded=false;
+        await Promise.all([syncSupabaseChannels(refreshedServer),syncServerMembers(user,refreshedServer)]);
+      }
+      vesselNotice(`Сервер передан пользователю ${member.username}.`,'success');
+      render();
+      return;
+    }
     if(action==='1'||action==='2'){
       const role=action==='2'?'moderator':'member';
       const {error}=await supabase.from('server_members').update({role}).eq('server_id',server.dbId).eq('user_id',memberId);
