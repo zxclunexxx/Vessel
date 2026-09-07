@@ -4,6 +4,23 @@ path = Path('src/main.js')
 text = path.read_text(encoding='utf-8')
 changed = False
 
+end_call_start = text.find('async function endCall(')
+end_call_end = text.find('function toggleCallMicrophone', end_call_start)
+end_call_block = text[end_call_start:end_call_end] if end_call_start >= 0 and end_call_end > end_call_start else ''
+semantic_markers = [
+    'let incomingCallTimer = null;',
+    'function clearIncomingCallTimer()',
+    'incomingCallTimer=setTimeout(()=>{',
+    '},32000);',
+    'if(incomingCall?.from===row.friend_id){clearIncomingCallTimer();incomingCall=null;render();}',
+    'voiceDeafened=false;\n  clearIncomingCallTimer();\n  incomingCall=null;',
+    'const invite=incomingCall;\n  clearIncomingCallTimer();',
+    'const invite=incomingCall; clearIncomingCallTimer(); incomingCall=null;',
+]
+if all(marker in text for marker in semantic_markers) and 'clearIncomingCallTimer();' in end_call_block:
+    print('Incoming-call timeout cleanup already applied; nothing to change')
+    raise SystemExit(0)
+
 
 def replace_once(old, new, label):
     global text, changed
@@ -64,11 +81,18 @@ replace_once(
     'reject incoming timer cleanup',
 )
 
-replace_once(
-    """  callAccepted=false;\n  clearCallDisconnectTimer();\n  if(callInviteTimer){clearTimeout(callInviteTimer);callInviteTimer=null;}\n""",
-    """  callAccepted=false;\n  clearCallDisconnectTimer();\n  clearIncomingCallTimer();\n  if(callInviteTimer){clearTimeout(callInviteTimer);callInviteTimer=null;}\n""",
-    'end call incoming timer cleanup',
-)
+end_call_start = text.find('async function endCall(')
+end_call_end = text.find('function toggleCallMicrophone', end_call_start)
+end_call_block = text[end_call_start:end_call_end] if end_call_start >= 0 and end_call_end > end_call_start else ''
+if 'clearIncomingCallTimer();' not in end_call_block:
+    old = """  callAccepted=false;\n  clearCallDisconnectTimer();\n  if(callInviteTimer){clearTimeout(callInviteTimer);callInviteTimer=null;}\n"""
+    new = """  callAccepted=false;\n  clearCallDisconnectTimer();\n  clearIncomingCallTimer();\n  if(callInviteTimer){clearTimeout(callInviteTimer);callInviteTimer=null;}\n"""
+    if old not in text:
+        raise SystemExit('end call incoming timer cleanup anchor not found')
+    text = text.replace(old, new, 1)
+    changed = True
+else:
+    print('end call incoming timer cleanup already applied')
 
 required = [
     'let incomingCallTimer = null;',
@@ -82,6 +106,10 @@ required = [
 for marker in required:
     if marker not in text:
         raise SystemExit(f'missing incoming call timeout marker: {marker}')
+end_call_start = text.find('async function endCall(')
+end_call_end = text.find('function toggleCallMicrophone', end_call_start)
+if end_call_start < 0 or end_call_end <= end_call_start or 'clearIncomingCallTimer();' not in text[end_call_start:end_call_end]:
+    raise SystemExit('missing end-call incoming timer cleanup')
 
 if changed:
     path.write_text(text, encoding='utf-8')
