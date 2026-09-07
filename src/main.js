@@ -1508,7 +1508,7 @@ function render() {
     if(serverChannels().some(channel=>channel.name.toLocaleLowerCase('ru-RU')===channelName.toLocaleLowerCase('ru-RU'))){vesselNotice('Канал с таким названием уже существует.','error');return;}
     const position=serverChannels().reduce((max,channel)=>Math.max(max,Number(channel.position)||0),-1)+1;
     const {data,error}=await supabase.from('channels').insert({server_id:server.dbId,name:channelName,kind,position}).select('id,name,kind,position').single();
-    if(error){vesselNotice(`Не удалось создать канал: ${error.message}`,'error');return;}
+    if(error){vesselNotice(error.code==='23505'?'Канал с таким названием уже существует.':`Не удалось создать канал: ${error.message}`,'error');if(error.code==='23505'){server.__channelsLoaded=false;await syncSupabaseChannels(server);}return;}
     activeChannelId=data.id; activeChannelName=data.name; activeChannelKind=data.kind; currentDm=null; activeDmId=null; friendsOpen=false; messages=[];
     server.__channelsLoaded=false;
     await syncSupabaseChannels(server);
@@ -1528,7 +1528,7 @@ function render() {
       if(!channelName||channelName===channel.name)return;
       if(serverChannels().some(item=>item.id!==channel.id&&item.name.toLocaleLowerCase('ru-RU')===channelName.toLocaleLowerCase('ru-RU'))){vesselNotice('Канал с таким названием уже существует.','error');return;}
       const {error}=await supabase.from('channels').update({name:channelName}).eq('id',channel.id).eq('server_id',server.dbId);
-      if(error){vesselNotice(`Не удалось переименовать канал: ${error.message}`,'error');return;}
+      if(error){vesselNotice(error.code==='23505'?'Канал с таким названием уже существует.':`Не удалось переименовать канал: ${error.message}`,'error');if(error.code==='23505'){server.__channelsLoaded=false;await syncSupabaseChannels(server);}return;}
       activeChannelId=channel.id;
       server.__channelsLoaded=false;
       await syncSupabaseChannels(server);
