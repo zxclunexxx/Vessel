@@ -3,6 +3,8 @@ import subprocess
 import sys
 
 scripts_dir = Path(__file__).resolve().parent
+repo_dir = scripts_dir.parent
+log_path = repo_dir / 'fast-gate-smoke.log'
 checks = [
     'runtime_smoke_check_current.py',
     'logout_session_smoke_check.py',
@@ -36,9 +38,31 @@ missing = [name for name in checks if not (scripts_dir / name).is_file()]
 if missing:
     raise SystemExit('Missing Fast Gate smoke checks: ' + ', '.join(missing))
 
-print(f'Vessel Fast Gate smoke suite: {len(checks)} checks')
+lines = [f'Vessel Fast Gate smoke suite: {len(checks)} checks']
+print(lines[0], flush=True)
 for name in checks:
-    print(f'\n=== {name} ===', flush=True)
-    subprocess.run([sys.executable, str(scripts_dir / name)], cwd=scripts_dir.parent, check=True)
+    heading = f'\n=== {name} ==='
+    print(heading, flush=True)
+    lines.append(heading)
+    result = subprocess.run(
+        [sys.executable, str(scripts_dir / name)],
+        cwd=repo_dir,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    output = result.stdout or ''
+    if output:
+        print(output, end='' if output.endswith('\n') else '\n', flush=True)
+        lines.append(output.rstrip('\n'))
+    if result.returncode != 0:
+        failure = f'FAILED: {name} (exit {result.returncode})'
+        print(failure, flush=True)
+        lines.append(failure)
+        log_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        raise SystemExit(result.returncode)
 
-print('\nAll Vessel Fast Gate smoke checks passed')
+success = '\nAll Vessel Fast Gate smoke checks passed'
+print(success, flush=True)
+lines.append(success)
+log_path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
