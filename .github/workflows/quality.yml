@@ -50,6 +50,8 @@ jobs:
         run: python scripts/voice_controls_smoke_check.py
       - name: Incoming call timeout lifecycle smoke check
         run: python scripts/incoming_call_timeout_smoke_check.py
+      - name: Direct-call ICE restart recovery smoke check
+        run: python scripts/call_ice_restart_smoke_check.py
       - name: Media context smoke check
         run: python scripts/media_context_smoke_check.py
       - name: Notification read race smoke check
