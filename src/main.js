@@ -222,7 +222,14 @@ async function findAndRequestFriend(user) {
     vesselNotice(request.receiver_id===user.id ? `${target.username} уже отправил тебе заявку. Открой раздел «Друзья».` : 'Заявка уже отправлена.');
     return;
   }
-  const {error:sendError}=await supabase.from('friend_requests').upsert({sender_id:user.id,receiver_id:target.id,status:'pending',updated_at:new Date().toISOString()},{onConflict:'sender_id,receiver_id'});
+  let sendError=null;
+  if(request&&request.sender_id===user.id&&['declined','cancelled'].includes(request.status)){
+    const result=await supabase.from('friend_requests').update({status:'pending',updated_at:new Date().toISOString()}).eq('id',request.id).eq('sender_id',user.id).in('status',['declined','cancelled']);
+    sendError=result.error;
+  }else{
+    const result=await supabase.from('friend_requests').insert({sender_id:user.id,receiver_id:target.id,status:'pending'});
+    sendError=result.error;
+  }
   if(sendError){
     if(sendError.code==='23505'){
       window.__vesselSocialLoaded=false;
