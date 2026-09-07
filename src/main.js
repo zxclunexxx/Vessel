@@ -80,6 +80,7 @@ function statusLabel(value='online') {
   const key=String(value||'online').toLowerCase();
   if(['dnd','не беспокоить'].includes(key))return 'Не беспокоить';
   if(['away','idle','отошёл'].includes(key))return 'Отошёл';
+  if(['offline','не в сети'].includes(key))return 'Не в сети';
   return 'В сети';
 }
 function statusTone(value='online') {
@@ -165,22 +166,39 @@ function syncRtcVisualRuntime(){
 }
 function vesselDialog({title,message='',input=false,value='',placeholder='',choices=[]}) {
   return new Promise(resolve=>{
+    const previousFocus=document.activeElement;
     const overlay=document.createElement('div');
     overlay.className='modal vessel-dialog';
+    overlay.setAttribute('role','dialog');
+    overlay.setAttribute('aria-modal','true');
     const choiceMarkup=choices.map(choice=>`<button type="button" class="dialog-choice ${choice.danger?'dialog-danger':''}" data-dialog-value="${escapeHtml(choice.value)}">${escapeHtml(choice.label)}</button>`).join('');
-    overlay.innerHTML=`<div class="modal-card dialog-card"><button class="modal-close" data-dialog-cancel>×</button><h2>${escapeHtml(title)}</h2>${message?`<p>${escapeHtml(message)}</p>`:''}${input?`<input class="dialog-input" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}" />`:''}<div class="dialog-actions">${choiceMarkup}${input?'<button type="button" class="primary" data-dialog-submit>Готово</button>':''}</div></div>`;
+    overlay.innerHTML=`<div class="modal-card dialog-card"><button class="modal-close" data-dialog-cancel aria-label="Закрыть диалог">×</button><h2>${escapeHtml(title)}</h2>${message?`<p>${escapeHtml(message)}</p>`:''}${input?`<input class="dialog-input" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}" />`:''}<div class="dialog-actions">${choiceMarkup}${input?'<button type="button" class="primary" data-dialog-submit>Готово</button>':''}</div></div>`;
     document.body.appendChild(overlay);
-    const finish=result=>{overlay.remove();resolve(result);};
+    let finished=false;
+    const finish=result=>{
+      if(finished)return;
+      finished=true;
+      document.removeEventListener('keydown',onKeyDown,true);
+      overlay.remove();
+      if(previousFocus?.isConnected&&typeof previousFocus.focus==='function')previousFocus.focus();
+      resolve(result);
+    };
+    const onKeyDown=event=>{if(event.key==='Escape'){event.preventDefault();finish(null);}};
+    document.addEventListener('keydown',onKeyDown,true);
     overlay.querySelector('[data-dialog-cancel]').addEventListener('click',()=>finish(null));
     overlay.addEventListener('click',event=>{if(event.target===overlay)finish(null);});
     overlay.querySelectorAll('[data-dialog-value]').forEach(button=>button.addEventListener('click',()=>finish(button.dataset.dialogValue)));
-    if(input){
-      const field=overlay.querySelector('.dialog-input');
+    const field=input?overlay.querySelector('.dialog-input'):null;
+    if(field){
       const submit=()=>finish(field.value);
       overlay.querySelector('[data-dialog-submit]').addEventListener('click',submit);
-      field.addEventListener('keydown',event=>{if(event.key==='Enter')submit();if(event.key==='Escape')finish(null);});
-      setTimeout(()=>{field.focus();field.select();},0);
+      field.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();submit();}});
     }
+    setTimeout(()=>{
+      const target=field||overlay.querySelector('[data-dialog-value], [data-dialog-submit], [data-dialog-cancel]');
+      target?.focus();
+      if(field)field.select();
+    },0);
   });
 }
 function vesselPrompt(title,value='',placeholder='') { return vesselDialog({title,input:true,value,placeholder}); }
@@ -248,6 +266,7 @@ function triggerVesselViewMotion(previousContext,currentContext) {
     node.addEventListener('animationend',()=>node.classList.remove(className),{once:true});
   }));
 }
+/* VESSEL_FULL_QA_HARDENING_V1 */
 /* VESSEL_AUTH_EMAIL_RESILIENCE_V1 */
 let signupEmailCooldownUntil = 0;
 let authSignupCooldownTimer = null;
@@ -1673,6 +1692,9 @@ function resetAuthenticatedRuntime() {
   cancelCallInboxReconnect();
   cancelCallSignalReconnect();
   resetRtcConfiguration();
+  stopSpeakingMeters();
+  syncCallUiTicker(false);
+  callStartedAt=0;
   dmMessagesSyncRevision++;
   const channels=[...(window.__vesselRealtimeChannels||[]),voiceRoom,callChannel,callInboxChannel].filter(Boolean);
   window.__vesselRealtimeChannels=null;
