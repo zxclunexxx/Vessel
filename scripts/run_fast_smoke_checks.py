@@ -33,6 +33,7 @@ checks = [
     'server_context_smoke_check.py',
     'message_auth_context_smoke_check.py',
     'channel_send_guard_smoke_check.py',
+    'ui_foundation_shell_smoke_check.py',
 ]
 
 missing = [name for name in checks if not (scripts_dir / name).is_file()]
