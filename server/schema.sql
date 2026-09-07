@@ -421,7 +421,19 @@ create policy "owners can update member roles" on public.server_members for upda
   role in ('moderator','member') and exists(select 1 from public.servers s where s.id=server_members.server_id and s.owner_id=(select auth.uid()) and server_members.user_id<>s.owner_id)
 );
 create policy "members can leave or owners can remove" on public.server_members for delete to authenticated using(
-  user_id=(select auth.uid()) or exists(select 1 from public.servers s where s.id=server_members.server_id and s.owner_id=(select auth.uid()) and server_members.user_id<>s.owner_id)
+  (
+    user_id=(select auth.uid())
+    and not exists(
+      select 1 from public.servers s
+      where s.id=server_members.server_id and s.owner_id=(select auth.uid())
+    )
+  )
+  or exists(
+    select 1 from public.servers s
+    where s.id=server_members.server_id
+      and s.owner_id=(select auth.uid())
+      and server_members.user_id<>s.owner_id
+  )
 );
 
 create policy "members can read channels" on public.channels for select to authenticated using(
