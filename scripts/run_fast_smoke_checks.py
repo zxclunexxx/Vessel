@@ -7,6 +7,7 @@ repo_dir = scripts_dir.parent
 log_path = repo_dir / 'fast-gate-smoke.log'
 checks = [
     'runtime_smoke_check_current.py',
+    'auth_email_resilience_smoke_check.py',
     'logout_session_smoke_check.py',
     'realtime_session_smoke_check.py',
     'social_realtime_resilience_smoke_check.py',
