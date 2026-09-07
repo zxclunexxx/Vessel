@@ -46,6 +46,10 @@ let callInboxReconnectTimer = null;
 let callInboxReconnectAttempt = 0;
 let callSignalReconnectTimer = null;
 let callSignalReconnectAttempt = 0;
+/* VESSEL_UI_VOICE_CALLS_V1 */
+let callStartedAt = 0;
+let callUiTicker = null;
+const rtcSpeakingMeters = new Map();
 let activeServerIndex = 0;
 let activeServerId = localStorage.getItem('vesselActiveServerId') || null;
 let serversSyncRevision = 0;
@@ -84,6 +88,80 @@ function statusTone(value='online') {
   if(['away','idle','отошёл'].includes(key))return 'away';
   if(['offline','не в сети'].includes(key))return 'offline';
   return 'online';
+}
+function formatCallDuration(startedAt=0){
+  if(!startedAt)return '00:00';
+  const total=Math.max(0,Math.floor((Date.now()-startedAt)/1000));
+  const h=Math.floor(total/3600),m=Math.floor((total%3600)/60),s=total%60;
+  return h?`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+function callVisualState(){
+  const state=callConnection?.connectionState||'new';
+  if(callSignalReconnectTimer||callIceRestartInFlight||['failed','disconnected'].includes(state))return 'reconnecting';
+  if(state==='connected')return 'connected';
+  if(callAccepted)return 'connecting';
+  return 'calling';
+}
+function callVisualLabel(){
+  const state=callVisualState();
+  if(state==='connected')return callVideo?'Видеосвязь защищена':'Голосовая связь';
+  if(state==='reconnecting')return 'Восстанавливаем соединение…';
+  if(state==='connecting')return 'Соединяем…';
+  return 'Вызов…';
+}
+function voiceVisualState(){
+  if(voiceReconnectTimer||(voiceReconnectContext&&!voiceRoom))return 'reconnecting';
+  if(voiceStream&&voiceRoom&&voiceChannelId===activeChannelId)return 'connected';
+  return 'ready';
+}
+function voiceVisualLabel(){
+  const state=voiceVisualState();
+  if(state==='reconnecting')return 'Восстанавливаем комнату…';
+  if(state==='connected')return `${Math.max(1,voiceParticipants.length)} в комнате`;
+  return 'Готово к подключению';
+}
+function syncSpeakingClass(key,speaking){
+  document.querySelectorAll('[data-speaking-key]').forEach(node=>{if(node.dataset.speakingKey===key)node.classList.toggle('is-speaking',Boolean(speaking));});
+}
+function stopSpeakingMeter(key){
+  const meter=rtcSpeakingMeters.get(key);if(!meter)return;rtcSpeakingMeters.delete(key);
+  if(meter.raf)cancelAnimationFrame(meter.raf);try{meter.source?.disconnect();}catch{}try{meter.analyser?.disconnect();}catch{}try{meter.context?.close();}catch{}syncSpeakingClass(key,false);
+}
+function stopSpeakingMeters(prefix=''){for(const key of [...rtcSpeakingMeters.keys()])if(!prefix||key.startsWith(prefix))stopSpeakingMeter(key);}
+function watchSpeakingStream(stream,key){
+  if(!stream?.getAudioTracks?.().length||!key)return;
+  const existing=rtcSpeakingMeters.get(key);if(existing?.stream===stream)return;if(existing)stopSpeakingMeter(key);
+  const AudioContextCtor=window.AudioContext||window.webkitAudioContext;if(!AudioContextCtor)return;
+  try{
+    const context=new AudioContextCtor(),analyser=context.createAnalyser(),source=context.createMediaStreamSource(stream);analyser.fftSize=256;analyser.smoothingTimeConstant=.72;source.connect(analyser);context.resume?.().catch(()=>{});
+    const data=new Uint8Array(analyser.fftSize),meter={stream,context,source,analyser,raf:null,speaking:false};rtcSpeakingMeters.set(key,meter);
+    const sample=()=>{if(rtcSpeakingMeters.get(key)!==meter)return;const live=stream.getAudioTracks().some(track=>track.readyState==='live'&&track.enabled);analyser.getByteTimeDomainData(data);let energy=0;for(const value of data){const n=(value-128)/128;energy+=n*n;}const speaking=Boolean(live&&Math.sqrt(energy/data.length)>.035);if(speaking!==meter.speaking){meter.speaking=speaking;syncSpeakingClass(key,speaking);}meter.raf=requestAnimationFrame(sample);};sample();
+  }catch(error){console.warn('RTC speaking meter unavailable',error);}
+}
+function syncCallUiTicker(active=Boolean(callConnection||callStream)){
+  const update=()=>document.querySelectorAll('[data-call-duration]').forEach(node=>{node.textContent=formatCallDuration(callStartedAt);});
+  if(!active){if(callUiTicker){clearInterval(callUiTicker);callUiTicker=null;}return;}update();if(!callUiTicker)callUiTicker=setInterval(update,1000);
+}
+function callStageMarkup(user){
+  const state=callVisualState(),peerName=callPeerName||currentDm||'Пользователь',peerInitial=escapeHtml(peerName?.[0]?.toUpperCase()||'?'),selfInitial=escapeHtml(user?.name?.[0]?.toUpperCase()||'?'),reconnecting=state==='reconnecting',muted=!callMicEnabled,cameraOff=callVideo&&!callCameraEnabled;
+  const controls=`<div class="rtc-control-dock"><button id="toggle-call-mic" class="rtc-dock-button ${muted?'off':''}" type="button"><span>${muted?'🔇':'🎙'}</span><small>${muted?'Микрофон выкл.':'Микрофон'}</small></button>${callVideo?`<button id="toggle-call-camera" class="rtc-dock-button ${cameraOff?'off':''}" type="button"><span>${cameraOff?'🚫':'📷'}</span><small>${cameraOff?'Камера выкл.':'Камера'}</small></button>`:''}<button id="end-call" class="rtc-dock-button end" type="button"><span>☎</span><small>Завершить</small></button></div>`;
+  const top=`<div class="rtc-stage-topbar"><div><span class="rtc-eyebrow">${callVideo?'VESSEL CALL':'VESSEL AUDIO'}</span><h2>${callVideo?escapeHtml(peerName):`Звонок с ${escapeHtml(peerName)}`}</h2></div><div class="rtc-session-meta"><span class="rtc-state-pill ${reconnecting?'warning':''}"><i></i><span data-call-state-label>${escapeHtml(callVisualLabel())}</span></span><time data-call-duration>${formatCallDuration(callStartedAt)}</time></div></div>`;
+  const reconnect=reconnecting?'<div class="rtc-reconnect-banner"><span>↻</span><div><b>Связь нестабильна</b><small>Vessel автоматически восстанавливает сигнал и ICE-маршрут.</small></div></div>':'';
+  if(callVideo)return `<section class="rtc-stage call-stage video-mode state-${state}" data-call-stage data-state="${state}">${top}${reconnect}<div class="video-stage-grid"><div class="remote-video-tile" data-speaking-key="call-peer"><video id="remote-video" class="remote-video ${remoteCallStream?'':'hidden'}" autoplay playsinline></video><div class="video-placeholder ${remoteCallStream?'hidden':''}"><div class="participant-avatar xl">${peerInitial}</div><span>Ожидаем видео…</span></div><div class="video-label"><span class="speaking-dot"></span>${escapeHtml(peerName)}</div></div><div class="local-preview ${cameraOff?'camera-off':''}" data-speaking-key="call-self"><video id="local-video" class="local-video ${callStream?'':'hidden'}" autoplay muted playsinline></video><div class="local-camera-fallback"><div class="participant-avatar">${selfInitial}</div><span>Камера выключена</span></div><div class="video-label">Ты</div></div></div>${controls}</section>`;
+  return `<section class="rtc-stage call-stage audio-mode state-${state}" data-call-stage data-state="${state}">${top}${reconnect}<div class="audio-call-focus"><div class="audio-orbit orbit-one"></div><div class="audio-orbit orbit-two"></div><div class="participant-avatar hero" data-speaking-key="call-peer">${peerInitial}<span class="speaking-ring"></span></div><h3>${escapeHtml(peerName)}</h3><p>${escapeHtml(callVisualLabel())}</p><div class="audio-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="self-audio-chip" data-speaking-key="call-self"><span class="participant-avatar">${selfInitial}</span><div><b>Ты</b><small>${muted?'Микрофон выключен':'Микрофон активен'}</small></div></div></div>${controls}</section>`;
+}
+function voiceStageMarkup(user){
+  const state=voiceVisualState(),connected=state==='connected',reconnecting=state==='reconnecting',micOff=voiceStream?.getAudioTracks?.()[0]?.enabled===false;
+  const participants=connected?(voiceParticipants.length?voiceParticipants:[{id:user.id,name:user.name}]):[];
+  const cards=participants.map(participant=>{const self=participant.id===user.id,name=self?'Ты':(participant.name||'Участник'),key=`voice-${participant.id}`;return `<article class="voice-participant-card ${self?'self':''}" data-speaking-key="${escapeHtml(key)}"><div class="participant-avatar">${escapeHtml(name?.[0]?.toUpperCase()||'?')}<span class="speaking-ring"></span></div><div><b>${escapeHtml(name)}</b><small>${self?(micOff?'Микрофон выключен':'Ты в эфире'):'Подключён'}</small></div><span class="voice-card-level"><i></i><i></i><i></i></span></article>`;}).join('');
+  const controls=`<div class="rtc-control-dock ${connected?'':'single'}">${connected?`<button id="mute-voice" class="rtc-dock-button ${micOff?'off':''}" type="button"><span>${micOff?'🔇':'🎙'}</span><small>Микрофон</small></button><button id="deafen-voice" class="rtc-dock-button ${voiceDeafened?'off':''}" type="button"><span>${voiceDeafened?'🙉':'🎧'}</span><small>Звук</small></button>`:''}<button id="join-voice" class="rtc-dock-button ${connected?'end':'join'}" type="button"><span>${connected?'↙':'🎙'}</span><small>${connected?'Выйти':reconnecting?'Подождать':'Войти в комнату'}</small></button></div>`;
+  return `<section class="rtc-stage voice-stage state-${state}" data-voice-stage data-state="${state}"><div class="rtc-stage-topbar"><div><span class="rtc-eyebrow">VESSEL VOICE</span><h2>${escapeHtml(activeChannelName)}</h2><p>${escapeHtml(getActiveServer()?.name||'Vessel')}</p></div><span class="rtc-state-pill ${reconnecting?'warning':''}"><i></i><span data-voice-state-label>${escapeHtml(voiceVisualLabel())}</span></span></div>${reconnecting?'<div class="rtc-reconnect-banner"><span>↻</span><div><b>Комната переподключается</b><small>Vessel восстанавливает Realtime и peer-соединения автоматически.</small></div></div>':''}<div class="voice-room-hero"><div class="voice-room-symbol">⌁</div><h3>${connected?'Вы в голосовой комнате':'Голосовая комната готова'}</h3><p>${connected?'Активные участники подсвечиваются в реальном времени.':'Подключись, чтобы увидеть участников и начать разговор.'}</p></div><div class="voice-participant-grid">${cards||'<div class="voice-room-empty"><span>◇</span><b>Пока никого нет</b><small>Будь первым, кто подключится.</small></div>'}</div>${controls}</section>`;
+}
+function syncRtcVisualRuntime(){
+  if((callConnection||callStream)&&!callStartedAt)callStartedAt=Date.now();
+  const expected=new Map();if(callStream)expected.set('call-self',callStream);if(remoteCallStream)expected.set('call-peer',remoteCallStream);if(voiceStream&&savedUser?.id)expected.set(`voice-${savedUser.id}`,voiceStream);for(const [peerId,state] of voicePeers){const stream=state.audio?.srcObject;if(stream)expected.set(`voice-${peerId}`,stream);}for(const [key,meter] of [...rtcSpeakingMeters])if(!expected.has(key)||expected.get(key)!==meter.stream)stopSpeakingMeter(key);for(const [key,stream] of expected)watchSpeakingStream(stream,key);syncCallUiTicker(Boolean(callConnection||callStream));
+  const callStage=document.querySelector('[data-call-stage]');if(callStage){callStage.querySelectorAll('[data-call-state-label]').forEach(node=>node.textContent=callVisualLabel());const remote=document.querySelector('#remote-video'),placeholder=callStage.querySelector('.video-placeholder');if(remote)remote.classList.toggle('hidden',!remoteCallStream);if(placeholder)placeholder.classList.toggle('hidden',Boolean(remoteCallStream));}
+  const voiceStage=document.querySelector('[data-voice-stage]');if(voiceStage)voiceStage.querySelectorAll('[data-voice-state-label]').forEach(node=>node.textContent=voiceVisualLabel());
 }
 function vesselDialog({title,message='',input=false,value='',placeholder='',choices=[]}) {
   return new Promise(resolve=>{
@@ -735,6 +813,7 @@ async function syncVoicePresence(user){
   for(const peerId of [...voicePeerReconnectTimers.keys()])if(!ids.has(peerId))cancelVoicePeerReconnect(peerId);
   const status=document.querySelector('.voice-status');
   if(status)status.textContent=`🎙 В голосовой комнате: ${Math.max(1,voiceParticipants.length)}`;
+  if(activeChannelKind==='voice'&&voiceChannelId===activeChannelId)render();
 }
 
 function cancelVoiceReconnect(){
@@ -748,6 +827,7 @@ function scheduleVoiceReconnect(user,channelId,serverId){
   if(voiceReconnectContext&&(voiceReconnectContext.channelId!==channelId||voiceReconnectContext.serverId!==serverId))cancelVoiceReconnect();
   if(voiceReconnectTimer)return;
   voiceReconnectContext={channelId,serverId};
+  render();
   voiceReconnectAttempt=Math.min(voiceReconnectAttempt+1,4);
   const attempt=voiceReconnectAttempt;
   const delay=Math.min(1000*(2**(attempt-1)),8000);
@@ -775,6 +855,7 @@ async function leaveVoiceRoom(){
   voiceStream?.getTracks().forEach(track=>track.stop());voiceStream=null;
   for(const peerId of [...voicePeers.keys()])removeVoicePeer(peerId);
   cancelAllVoicePeerReconnects();
+  stopSpeakingMeters('voice-');
   voiceParticipants=[];voiceChannelId=null;voiceServerId=null;voiceDeafened=false;
   if(room&&supabase){try{await supabase.removeChannel(room);}catch{}}
   render();
@@ -1150,7 +1231,7 @@ async function prepareCallConnection(user,peerId,video) {
     if (callAccepted) sendCallSignal(user,peerId,{type:'ice',candidate:e.candidate},video).catch(error=>console.warn('Call ICE send failed',error));
     else localIceCandidates.push(e.candidate);
   };
-  callConnection.ontrack=e=>{remoteCallStream=e.streams[0];const el=document.querySelector('#remote-video');if(el){el.srcObject=remoteCallStream;el.play().catch(()=>{});} };
+  callConnection.ontrack=e=>{remoteCallStream=e.streams[0];const el=document.querySelector('#remote-video');if(el){el.srcObject=remoteCallStream;el.play().catch(()=>{});}syncRtcVisualRuntime();};
   const connection = callConnection;
   callConnection.onconnectionstatechange=()=>{
     if(connection!==callConnection)return;
@@ -1289,6 +1370,9 @@ async function endCall(notify=true) {
   if(callInviteTimer){clearTimeout(callInviteTimer);callInviteTimer=null;}
   callMicEnabled=true;
   callCameraEnabled=true;
+  callStartedAt=0;
+  stopSpeakingMeters('call-');
+  syncCallUiTicker(false);
   render();
   if(notify&&peer&&user?.id&&room?.__subscribed){
     try {
@@ -1910,9 +1994,10 @@ function render() {
   const activeDmIsFriend=Boolean(activeDmId&&friends.some(friend=>friend.id===activeDmId));
   const activeServer=getActiveServer();
   const canManageChannel=Boolean(!friendsOpen&&!currentDm&&activeChannelId&&activeServer?.dbId&&['owner','moderator'].includes(activeServer.role));
-  const callActions=callInProgress
-    ? `<button id="toggle-call-mic" class="call-control" title="${callMicEnabled?'Выключить микрофон':'Включить микрофон'}">${callMicEnabled?'🎙':'🔇'}</button>${callVideo?`<button id="toggle-call-camera" class="call-control" title="${callCameraEnabled?'Выключить камеру':'Включить камеру'}">${callCameraEnabled?'📷':'🚫'}</button>`:''}<button id="end-call" class="hangup" title="Завершить звонок">☎</button>`
-    : (!friendsOpen&&activeDmId&&activeDmIsFriend) ? `<button id="audio-call" title="Аудиозвонок">📞</button><button id="video-call" title="Видеозвонок">🎥</button>` : '';
+  const callActions=!callInProgress&&(!friendsOpen&&activeDmId&&activeDmIsFriend)
+    ? `<button id="audio-call" title="Аудиозвонок">📞</button><button id="video-call" title="Видеозвонок">🎥</button>`
+    : '';
+  const rtcStage=callInProgress?callStageMarkup(user):(!friendsOpen&&!activeDmId&&activeChannelKind==='voice'?voiceStageMarkup(user):'');
   const dmList=dmThreads.length
     ? dmThreads.map(thread=>{const unread=unreadDirectMessageCount(thread.id);const tone=statusTone(thread.status);return `<button class="channel dm status-${tone} ${activeDmId===thread.id?'active':''}" data-dm-id="${thread.id}" data-dm="${escapeHtml(thread.username)}"><span class="dm-avatar-wrap"><span class="mini-avatar" style="background:${thread.avatar_color||'#8b7cff'}">${escapeHtml((thread.username||'?')[0].toUpperCase())}</span><i class="presence-dot"></i></span><span class="dm-copy"><b>${escapeHtml(thread.username)}</b><small>${escapeHtml(statusLabel(thread.status))}</small></span>${unread?`<em class="dm-unread" title="Непрочитанных: ${unread}">${unread>99?'99+':unread}</em>`:''}</button>`;}).join('')
     : window.__vesselDmThreadsLoaded
@@ -1937,12 +2022,13 @@ function render() {
         <div class="side-footer">Vessel v0.1 <span>●</span></div>
       </aside>
       <section class="chat">
-        <header class="chat-head"><div><h1><span>${friendsOpen?'👥':currentDm?'@':activeChannelKind==='voice'?'⌁':'#'}</span> ${friendsOpen?'Друзья':escapeHtml(currentDm || activeChannelName)}</h1><p>${friendsOpen?'Личные контакты и заявки':currentDm?'Личная переписка':activeChannelKind==='voice'?'Голосовая комната':escapeHtml(activeServer?.name || 'Vessel')}</p></div><div class="head-actions"><button id="mobile-nav" title="Каналы">☰</button>${canManageChannel?`<button id="channel-settings" title="Настройки канала">•••</button>`:''}${callActions}<button id="join-voice" class="join-voice ${!friendsOpen&&activeChannelKind==='voice'?'':'hidden'}">${voiceStream?(voiceChannelId===activeChannelId?'Выйти':'Переключиться'):'Войти'}</button><button id="mute-voice" class="join-voice ${!friendsOpen&&voiceStream&&voiceChannelId===activeChannelId?'':'hidden'}" title="${voiceStream?.getAudioTracks()[0]?.enabled===false?'Включить микрофон':'Выключить микрофон'}">${voiceStream?.getAudioTracks()[0]?.enabled===false?'🔇':'🎙'}</button><button id="deafen-voice" class="join-voice ${!friendsOpen&&voiceStream&&voiceChannelId===activeChannelId?'':'hidden'}" title="${voiceDeafened?'Включить звук участников':'Отключить звук участников'}">${voiceDeafened?'🙉':'🎧'}</button><button id="search-button" class="${friendsOpen?'hidden':''}">⌕</button><button id="friends-button" title="Друзья" class="${friendsOpen?'hidden':''}">♧</button><button id="notifications" title="Уведомления">🔔${notifications.filter(n=>!n.read_at).length?` <sup>${notifications.filter(n=>!n.read_at).length}</sup>`:''}</button><button id="head-settings">⚙</button></div></header>
-        <video id="remote-video" class="remote-video ${remoteCallStream?'':'hidden'}" autoplay playsinline></video><video id="local-video" class="local-video ${callStream||voiceStream?.getVideoTracks().length?'':'hidden'}" autoplay muted playsinline></video><div class="messages">${friendsOpen?`<div class="friends-view"><div class="friends-hero"><div class="friends-title"><span class="social-eyebrow">VESSEL SOCIAL</span><h2>Друзья</h2><p>Люди, заявки и быстрый доступ к личному общению.</p></div><div class="social-stats"><span><b>${friends.length}</b> друзей</span><span><b>${friendRequests.length}</b> входящих</span><span><b>${outgoingFriendRequests.length}</b> ожидают</span></div><button id="add-friend" class="primary social-add">Найти пользователя <span>＋</span></button></div>${!window.__vesselSocialLoaded?'<div class="social-skeleton"><i></i><i></i><i></i></div>':''}${friendRequests.map(request=>`<div class="friend-row friend-card request-row incoming-request"><div class="avatar" style="background:#ffb45e">${(request.profiles?.username||'?')[0].toUpperCase()}</div><b>${escapeHtml(request.profiles?.username||'Пользователь')}</b><span class="request-badge">Входящая заявка</span><button class="friend-action accept-action" data-accept-request="${request.id}" data-sender="${request.sender_id}">Принять</button><button class="danger compact friend-action" data-decline-request="${request.id}">Отклонить</button></div>`).join('')}${outgoingFriendRequests.map(request=>`<div class="friend-row friend-card outgoing-request-row"><div class="avatar" style="background:#5a6380">${escapeHtml((request.profiles?.username||'?')[0].toUpperCase())}</div><b>${escapeHtml(request.profiles?.username||'Пользователь')}</b><span class="pending-label">Ожидает подтверждения</span><button class="danger compact friend-action" data-cancel-request="${request.id}" title="Отменить заявку">×</button></div>`).join('')}${friends.length ? friends.map(friend=>`<div class="friend-row friend-card status-${statusTone(friend.status)}"><div class="avatar" style="background:${friend.avatar_color||'#8b7cff'}">${friend.username[0].toUpperCase()}</div><b>${escapeHtml(friend.username)}</b><span>${escapeHtml(statusLabel(friend.status))}</span><button class="friend-action dm-action" data-dm-id="${friend.id}" data-dm="${escapeHtml(friend.username)}" title="Написать">💬</button><button class="friend-action call-action" data-call-id="${friend.id}" data-call="${escapeHtml(friend.username)}" title="Позвонить">📞</button><button class="danger compact friend-action remove-action" data-remove-friend="${friend.id}" title="Удалить из друзей">×</button></div>`).join('') : `<div class="social-empty"><span class="social-empty-orb">◇</span><h3>Здесь пока тихо</h3><p>Найди пользователя Vessel и начни общение.</p></div>`}</div>`:`<div class="welcome"><div class="welcome-icon">${currentDm?'@':activeChannelKind==='voice'?'⌁':'#'}</div><h2>${currentDm?`Переписка с ${escapeHtml(currentDm)}`:`Добро пожаловать в ${activeChannelKind==='voice'?'':'#'}${escapeHtml(activeChannelName)}!`}</h2><p>${activeChannelKind==='voice'?'Подключись к комнате, чтобы общаться голосом.':'Здесь начинается ваше общение.'}</p></div>${(activeDmId?dmMessages:messages).map(m=>messageMarkup(m,user,!activeDmId||activeDmIsFriend)).join('')}`}</div>
+        <header class="chat-head"><div><h1><span>${friendsOpen?'👥':currentDm?'@':activeChannelKind==='voice'?'⌁':'#'}</span> ${friendsOpen?'Друзья':escapeHtml(currentDm || activeChannelName)}</h1><p>${friendsOpen?'Личные контакты и заявки':currentDm?'Личная переписка':activeChannelKind==='voice'?'Голосовая комната':escapeHtml(activeServer?.name || 'Vessel')}</p></div><div class="head-actions"><button id="mobile-nav" title="Каналы">☰</button>${canManageChannel?`<button id="channel-settings" title="Настройки канала">•••</button>`:''}${callActions}<button id="search-button" class="${friendsOpen?'hidden':''}">⌕</button><button id="friends-button" title="Друзья" class="${friendsOpen?'hidden':''}">♧</button><button id="notifications" title="Уведомления">🔔${notifications.filter(n=>!n.read_at).length?` <sup>${notifications.filter(n=>!n.read_at).length}</sup>`:''}</button><button id="head-settings">⚙</button></div></header>
+        ${rtcStage}<div class="messages">${friendsOpen?`<div class="friends-view"><div class="friends-hero"><div class="friends-title"><span class="social-eyebrow">VESSEL SOCIAL</span><h2>Друзья</h2><p>Люди, заявки и быстрый доступ к личному общению.</p></div><div class="social-stats"><span><b>${friends.length}</b> друзей</span><span><b>${friendRequests.length}</b> входящих</span><span><b>${outgoingFriendRequests.length}</b> ожидают</span></div><button id="add-friend" class="primary social-add">Найти пользователя <span>＋</span></button></div>${!window.__vesselSocialLoaded?'<div class="social-skeleton"><i></i><i></i><i></i></div>':''}${friendRequests.map(request=>`<div class="friend-row friend-card request-row incoming-request"><div class="avatar" style="background:#ffb45e">${(request.profiles?.username||'?')[0].toUpperCase()}</div><b>${escapeHtml(request.profiles?.username||'Пользователь')}</b><span class="request-badge">Входящая заявка</span><button class="friend-action accept-action" data-accept-request="${request.id}" data-sender="${request.sender_id}">Принять</button><button class="danger compact friend-action" data-decline-request="${request.id}">Отклонить</button></div>`).join('')}${outgoingFriendRequests.map(request=>`<div class="friend-row friend-card outgoing-request-row"><div class="avatar" style="background:#5a6380">${escapeHtml((request.profiles?.username||'?')[0].toUpperCase())}</div><b>${escapeHtml(request.profiles?.username||'Пользователь')}</b><span class="pending-label">Ожидает подтверждения</span><button class="danger compact friend-action" data-cancel-request="${request.id}" title="Отменить заявку">×</button></div>`).join('')}${friends.length ? friends.map(friend=>`<div class="friend-row friend-card status-${statusTone(friend.status)}"><div class="avatar" style="background:${friend.avatar_color||'#8b7cff'}">${friend.username[0].toUpperCase()}</div><b>${escapeHtml(friend.username)}</b><span>${escapeHtml(statusLabel(friend.status))}</span><button class="friend-action dm-action" data-dm-id="${friend.id}" data-dm="${escapeHtml(friend.username)}" title="Написать">💬</button><button class="friend-action call-action" data-call-id="${friend.id}" data-call="${escapeHtml(friend.username)}" title="Позвонить">📞</button><button class="danger compact friend-action remove-action" data-remove-friend="${friend.id}" title="Удалить из друзей">×</button></div>`).join('') : `<div class="social-empty"><span class="social-empty-orb">◇</span><h3>Здесь пока тихо</h3><p>Найди пользователя Vessel и начни общение.</p></div>`}</div>`:`<div class="welcome"><div class="welcome-icon">${currentDm?'@':activeChannelKind==='voice'?'⌁':'#'}</div><h2>${currentDm?`Переписка с ${escapeHtml(currentDm)}`:`Добро пожаловать в ${activeChannelKind==='voice'?'':'#'}${escapeHtml(activeChannelName)}!`}</h2><p>${activeChannelKind==='voice'?'Подключись к комнате, чтобы общаться голосом.':'Здесь начинается ваше общение.'}</p></div>${(activeDmId?dmMessages:messages).map(m=>messageMarkup(m,user,!activeDmId||activeDmIsFriend)).join('')}`}</div>
         ${activeDmId&&!activeDmIsFriend?'<div class="dm-empty">История доступна только для чтения. Добавь пользователя в друзья, чтобы снова писать и звонить.</div>':''}<form class="composer ${friendsOpen||(!currentDm&&activeChannelKind==='voice')||(activeDmId&&!activeDmIsFriend)?'hidden':''}"><button type="button" class="attach">＋</button><input placeholder="${currentDm?`Написать пользователю ${escapeHtml(currentDm)}`:`Написать в #${escapeHtml(activeChannelName)}`}" /><button type="button" id="emoji-button" title="Эмодзи">☺</button><button type="submit" class="send">➤</button></form>
       </section>
       <aside class="members">${friendsOpen?`<div class="members-title">ДРУЗЬЯ — ${friends.length}</div><div class="dm-empty">${friendRequests.length?`Входящих заявок: ${friendRequests.length}`:outgoingFriendRequests.length?`Исходящих заявок: ${outgoingFriendRequests.length}`:'Выбери друга, чтобы открыть личный чат.'}</div>`:`${voiceStream?`<div class="voice-status">🎙 В голосовой комнате: ${Math.max(1,voiceParticipants.length)}</div>`:''}${membersList}`}</aside>
-    </main><div class="modal hidden" id="settings-modal"><div class="modal-card"><button class="modal-close" id="close-settings">×</button><h2>Настройки профиля</h2><p>Измени данные, которые видят другие участники Vessel.</p><form id="settings-form"><label>Имя пользователя<input name="name" value="${escapeHtml(user.name)}" required minlength="2" maxlength="32" /></label><label>Статус<select name="status"><option value="online" ${['online','В сети'].includes(user.status)?'selected':''}>В сети</option><option value="dnd" ${['dnd','Не беспокоить'].includes(user.status)?'selected':''}>Не беспокоить</option><option value="away" ${['away','Отошёл'].includes(user.status)?'selected':''}>Отошёл</option></select></label><button class="primary" type="submit">Сохранить изменения</button></form><button class="danger" id="logout" type="button">Выйти из аккаунта</button></div></div>${incomingCall?`<div class="modal call-modal" id="incoming-call-modal"><div class="modal-card"><div class="call-avatar">${escapeHtml(incomingCall.name?.[0]?.toUpperCase()||'?')}</div><h2>${incomingCall.video?'Видеозвонок':'Аудиозвонок'}</h2><p>${escapeHtml(incomingCall.name)} звонит тебе в Vessel.</p><div class="call-actions"><button class="danger" id="reject-call" type="button">Отклонить</button><button class="primary" id="accept-call" type="button">Принять</button></div></div></div>`:''}`;
+    </main><div class="modal hidden" id="settings-modal"><div class="modal-card"><button class="modal-close" id="close-settings">×</button><h2>Настройки профиля</h2><p>Измени данные, которые видят другие участники Vessel.</p><form id="settings-form"><label>Имя пользователя<input name="name" value="${escapeHtml(user.name)}" required minlength="2" maxlength="32" /></label><label>Статус<select name="status"><option value="online" ${['online','В сети'].includes(user.status)?'selected':''}>В сети</option><option value="dnd" ${['dnd','Не беспокоить'].includes(user.status)?'selected':''}>Не беспокоить</option><option value="away" ${['away','Отошёл'].includes(user.status)?'selected':''}>Отошёл</option></select></label><button class="primary" type="submit">Сохранить изменения</button></form><button class="danger" id="logout" type="button">Выйти из аккаунта</button></div></div>${incomingCall?`<div class="modal call-modal incoming-call-modal" id="incoming-call-modal"><div class="modal-card incoming-call-card"><span class="rtc-eyebrow">ВХОДЯЩИЙ ВЫЗОВ</span><div class="incoming-call-orbit"><i></i><i></i><div class="call-avatar">${escapeHtml(incomingCall.name?.[0]?.toUpperCase()||'?')}</div></div><span class="incoming-call-type">${incomingCall.video?'🎥 Видеозвонок':'🎙 Аудиозвонок'}</span><h2>${escapeHtml(incomingCall.name)}</h2><p>звонит тебе в Vessel</p><div class="incoming-call-wave"><i></i><i></i><i></i><i></i><i></i></div><div class="call-actions"><button class="danger incoming-reject" id="reject-call" type="button"><span>☎</span>Отклонить</button><button class="primary incoming-accept" id="accept-call" type="button"><span>${incomingCall.video?'🎥':'🎙'}</span>Принять</button></div></div></div>`:''}`;
+  syncRtcVisualRuntime();
   const nextMessagesPane=document.querySelector('.messages');
   if(nextMessagesPane){
     const contextChanged=previousMessageContext!==currentMessageContext;
@@ -2419,4 +2505,15 @@ function render() {
 const authStateSubscription=supabase?.auth.onAuthStateChange((event,session)=>handleAuthStateChange(event,session)).data?.subscription||null;
 window.addEventListener('beforeunload',()=>authStateSubscription?.unsubscribe());
 bootstrapAuth().then(render).catch(error=>{console.error('Vessel bootstrap failed',error);const staleChannels=resetAuthenticatedRuntime();render();cleanupAuthenticatedChannels(staleChannels).catch(()=>{});});
-setInterval(()=>{const video=document.querySelector('#local-video');const stream=callStream||voiceStream;if(video&&stream&&video.srcObject!==stream){video.srcObject=stream;video.play().catch(()=>{});}const remote=document.querySelector('#remote-video');if(remote&&remoteCallStream&&remote.srcObject!==remoteCallStream){remote.srcObject=remoteCallStream;remote.play().catch(()=>{});}},500);
+setInterval(()=>{
+  const callStage=document.querySelector('[data-call-stage]');
+  if(callStage&&callStage.dataset.state!==callVisualState()){render();return;}
+  const voiceStage=document.querySelector('[data-voice-stage]');
+  if(voiceStage&&voiceStage.dataset.state!==voiceVisualState()){render();return;}
+  syncRtcVisualRuntime();
+  const video=document.querySelector('#local-video');
+  const stream=callStream||voiceStream;
+  if(video&&stream&&video.srcObject!==stream){video.srcObject=stream;video.play().catch(()=>{});}
+  const remote=document.querySelector('#remote-video');
+  if(remote&&remoteCallStream&&remote.srcObject!==remoteCallStream){remote.srcObject=remoteCallStream;remote.play().catch(()=>{});}
+},500);
