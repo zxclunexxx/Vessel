@@ -11,6 +11,8 @@ let voiceChannelId = null;
 let voiceServerId = null;
 let voiceParticipants = [];
 const voicePeers = new Map();
+const voicePeerReconnectTimers = new Map();
+const voicePeerReconnectAttempts = new Map();
 let voiceReconnectTimer = null;
 let voiceReconnectAttempt = 0;
 let voiceReconnectContext = null;
@@ -419,10 +421,40 @@ function removeVoicePeer(peerId) {
   state.audio?.remove();
   voicePeers.delete(peerId);
 }
+function cancelVoicePeerReconnect(peerId){
+  const timer=voicePeerReconnectTimers.get(peerId);
+  if(timer)clearTimeout(timer);
+  voicePeerReconnectTimers.delete(peerId);
+  voicePeerReconnectAttempts.delete(peerId);
+}
+function cancelAllVoicePeerReconnects(){
+  for(const peerId of [...voicePeerReconnectTimers.keys()])cancelVoicePeerReconnect(peerId);
+  voicePeerReconnectAttempts.clear();
+}
+function scheduleVoicePeerReconnect(user,peerId){
+  if(!user?.id||!peerId||peerId===user.id||voicePeerReconnectTimers.has(peerId))return;
+  if(!voiceRoom||!voiceStream||!voiceParticipants.some(item=>item.id===peerId))return;
+  const attempt=Math.min((voicePeerReconnectAttempts.get(peerId)||0)+1,4);
+  voicePeerReconnectAttempts.set(peerId,attempt);
+  const delay=Math.min(750*(2**(attempt-1)),6000);
+  const timer=setTimeout(async()=>{
+    voicePeerReconnectTimers.delete(peerId);
+    if(savedUser?.id!==user.id||!voiceRoom||!voiceStream||!voiceParticipants.some(item=>item.id===peerId)){cancelVoicePeerReconnect(peerId);return;}
+    if(voicePeers.has(peerId))return;
+    try{
+      await ensureVoicePeer(user,peerId,String(user.id)<String(peerId));
+    }catch(error){
+      console.warn('Voice peer reconnect failed',error);
+      if(attempt<4)scheduleVoicePeerReconnect(user,peerId);
+    }
+  },delay);
+  voicePeerReconnectTimers.set(peerId,timer);
+}
 
 async function sendVoiceSignal(user,peerId,signal){
-  if(!voiceRoom||!user?.id||!peerId)return;
-  await voiceRoom.send({type:'broadcast',event:'voice-signal',payload:{from:user.id,to:peerId,signal}});
+  if(!voiceRoom||!user?.id||!peerId)throw new Error('VOICE_SIGNAL_ROOM_UNAVAILABLE');
+  const result=await voiceRoom.send({type:'broadcast',event:'voice-signal',payload:{from:user.id,to:peerId,signal}});
+  if(result!=='ok')throw new Error(`VOICE_SIGNAL_${String(result||'FAILED').toUpperCase()}`);
 }
 
 async function ensureVoicePeer(user,peerId,initiator=false){
@@ -440,11 +472,27 @@ async function ensureVoicePeer(user,peerId,initiator=false){
     audio.srcObject=event.streams[0];audio.play().catch(()=>{});
   };
   pc.onconnectionstatechange=()=>{
-    if(['failed','closed'].includes(pc.connectionState)){removeVoicePeer(peerId);return;}
-    if(pc.connectionState==='disconnected')setTimeout(()=>{if(voicePeers.get(peerId)?.pc===pc&&pc.connectionState==='disconnected')removeVoicePeer(peerId);},3000);
+    if(pc.connectionState==='connected'){cancelVoicePeerReconnect(peerId);return;}
+    if(['failed','closed'].includes(pc.connectionState)){
+      removeVoicePeer(peerId);
+      scheduleVoicePeerReconnect(user,peerId);
+      return;
+    }
+    if(pc.connectionState==='disconnected')setTimeout(()=>{
+      if(voicePeers.get(peerId)?.pc===pc&&pc.connectionState==='disconnected'){
+        removeVoicePeer(peerId);
+        scheduleVoicePeerReconnect(user,peerId);
+      }
+    },5000);
   };
   if(initiator){
-    const offer=await pc.createOffer();await pc.setLocalDescription(offer);await sendVoiceSignal(user,peerId,{type:'offer',description:{type:pc.localDescription.type,sdp:pc.localDescription.sdp}});
+    try{
+      const offer=await pc.createOffer();await pc.setLocalDescription(offer);await sendVoiceSignal(user,peerId,{type:'offer',description:{type:pc.localDescription.type,sdp:pc.localDescription.sdp}});
+    }catch(error){
+      if(voicePeers.get(peerId)?.pc===pc)removeVoicePeer(peerId);
+      scheduleVoicePeerReconnect(user,peerId);
+      throw error;
+    }
   }
   return state;
 }
@@ -477,9 +525,13 @@ async function syncVoicePresence(user){
   voiceParticipants=entries.filter(item=>item?.user_id).map(item=>({id:item.user_id,name:item.name||'Участник'}));
   const ids=new Set(voiceParticipants.map(item=>item.id).filter(id=>id!==user.id));
   for(const peerId of ids){
-    if(!voicePeers.has(peerId))await ensureVoicePeer(user,peerId,String(user.id)<String(peerId));
+    if(!voicePeers.has(peerId)&&!voicePeerReconnectTimers.has(peerId)){
+      try{await ensureVoicePeer(user,peerId,String(user.id)<String(peerId));}
+      catch(error){console.warn('Voice peer connect failed',error);scheduleVoicePeerReconnect(user,peerId);}
+    }
   }
-  for(const peerId of [...voicePeers.keys()])if(!ids.has(peerId))removeVoicePeer(peerId);
+  for(const peerId of [...voicePeers.keys()])if(!ids.has(peerId)){removeVoicePeer(peerId);cancelVoicePeerReconnect(peerId);}
+  for(const peerId of [...voicePeerReconnectTimers.keys()])if(!ids.has(peerId))cancelVoicePeerReconnect(peerId);
   const status=document.querySelector('.voice-status');
   if(status)status.textContent=`🎙 В голосовой комнате: ${Math.max(1,voiceParticipants.length)}`;
 }
@@ -521,6 +573,7 @@ async function leaveVoiceRoom(){
   voiceRoom=null;
   voiceStream?.getTracks().forEach(track=>track.stop());voiceStream=null;
   for(const peerId of [...voicePeers.keys()])removeVoicePeer(peerId);
+  cancelAllVoicePeerReconnects();
   voiceParticipants=[];voiceChannelId=null;voiceServerId=null;
   if(room&&supabase){try{await supabase.removeChannel(room);}catch{}}
   render();
