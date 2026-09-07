@@ -34,6 +34,7 @@ on:
       - 'scripts/message_mutation_rpc_patch.py'
       - 'scripts/message_mutation_patch.py'
       - 'scripts/dm_unread_patch.py'
+      - 'scripts/notification_navigation_patch.py'
 
 permissions:
   contents: write
@@ -83,6 +84,7 @@ jobs:
           if [ -f scripts/message_mutation_rpc_patch.py ]; then python scripts/message_mutation_rpc_patch.py; fi
           if [ -f scripts/message_mutation_patch.py ]; then python scripts/message_mutation_patch.py; fi
           if [ -f scripts/dm_unread_patch.py ]; then python scripts/dm_unread_patch.py; fi
+          if [ -f scripts/notification_navigation_patch.py ]; then python scripts/notification_navigation_patch.py; fi
       - name: Check JavaScript syntax
         run: node --check src/main.js
       - name: Install locked dependencies
