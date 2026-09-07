@@ -7,6 +7,7 @@ electron = (root / 'electron' / 'main.cjs').read_text(encoding='utf-8')
 required_main = [
     "/* VESSEL_FULL_QA_HARDENING_V1 */",
     "/* VESSEL_FULL_QA_INTERACTION_PERF_V1 */",
+    "/* VESSEL_FULL_QA_CLEANUP_V1 */",
     "if(['offline','не в сети'].includes(key))return 'Не в сети';",
     "overlay.setAttribute('role','dialog');",
     "overlay.setAttribute('aria-modal','true');",
@@ -18,7 +19,6 @@ required_main = [
     "function syncRtcVisualRuntimeTicker(active=rtcVisualRuntimeActive())",
     "modal.setAttribute('role','dialog');",
     "modal.setAttribute('aria-modal','true');",
-    "document.body.classList.remove('mobile-drawer-open');",
 ]
 for marker in required_main:
     if marker not in main:
@@ -32,6 +32,16 @@ reset_block = main[reset_start:reset_end]
 for marker in ['stopSpeakingMeters();', 'syncCallUiTicker(false);', 'syncRtcVisualRuntimeTicker(false);', 'callStartedAt=0;']:
     if reset_block.count(marker) != 1:
         raise SystemExit(f'Runtime reset must contain exactly one {marker}')
+
+render_start = main.find('function render() {')
+render_end = main.find('  const previousMessagesPane=', render_start)
+if render_start < 0 or render_end < 0:
+    raise SystemExit('Render cleanup block not found')
+render_prefix = main[render_start:render_end]
+if render_prefix.count("document.body.classList.remove('mobile-drawer-open');") != 1:
+    raise SystemExit('Render must clear mobile drawer body state exactly once')
+if render_prefix.count("document.querySelector('.mobile-drawer-scrim')?.remove();") != 1:
+    raise SystemExit('Render must clear mobile drawer scrim exactly once')
 
 if "document.querySelector('.channels')?.classList.remove('mobile-open');" in main:
     raise SystemExit('Legacy mobile drawer close bypass still exists')
