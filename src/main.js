@@ -33,6 +33,7 @@ let incomingCall = null;
 let callMicEnabled = true;
 let callCameraEnabled = true;
 let callInviteTimer = null;
+let incomingCallTimer = null;
 let callDisconnectTimer = null;
 let activeServerIndex = 0;
 let activeServerId = localStorage.getItem('vesselActiveServerId') || null;
@@ -756,11 +757,20 @@ async function ensureCallInbox(user) {
         return;
       }
       incomingCall = {from:payload.from, name:caller.username || 'Пользователь', video:!!payload.video, offer:payload.offer};
+      clearIncomingCallTimer();
+      const incomingFrom=payload.from;
+      incomingCallTimer=setTimeout(()=>{
+        incomingCallTimer=null;
+        if(savedUser?.id!==user.id||incomingCall?.from!==incomingFrom)return;
+        incomingCall=null;
+        render();
+      },32000);
       render();
       return;
     }
     if (payload.type === 'bye') {
       if (incomingCall?.from === payload.from) {
+        clearIncomingCallTimer();
         incomingCall = null;
         render();
         return;
@@ -846,6 +856,9 @@ async function flushLocalIceCandidates(user, peerId, video) {
   if (!callAccepted || !localIceCandidates.length) return;
   const candidates = localIceCandidates.splice(0);
   for (const candidate of candidates) await sendCallSignal(user, peerId, {type:'ice', candidate}, video);
+}
+function clearIncomingCallTimer(){
+  if(incomingCallTimer){clearTimeout(incomingCallTimer);incomingCallTimer=null;}
 }
 function clearCallDisconnectTimer(){
   if(callDisconnectTimer){clearTimeout(callDisconnectTimer);callDisconnectTimer=null;}
@@ -942,6 +955,7 @@ async function startCall(video,user) {
 async function acceptIncomingCall(user) {
   if (!incomingCall || !user?.id) return;
   const invite=incomingCall;
+  clearIncomingCallTimer();
   const access=await verifyDirectMessageAccess(user,invite.from);
   if(incomingCall!==invite||savedUser?.id!==user.id)return;
   if(access!==true){
@@ -976,7 +990,7 @@ async function acceptIncomingCall(user) {
 }
 async function rejectIncomingCall(user) {
   if (!incomingCall) return;
-  const invite=incomingCall; incomingCall=null;
+  const invite=incomingCall; clearIncomingCallTimer(); incomingCall=null;
   await sendCallInvite(user,invite.from,{type:'decline'});
   render();
 }
@@ -1000,6 +1014,7 @@ async function endCall(notify=true) {
   callVideo=false;
   callAccepted=false;
   clearCallDisconnectTimer();
+  clearIncomingCallTimer();
   if(callInviteTimer){clearTimeout(callInviteTimer);callInviteTimer=null;}
   callMicEnabled=true;
   callCameraEnabled=true;
@@ -1086,7 +1101,7 @@ function connectSupabaseRealtime(user) {
       if(savedUser?.id!==user.id)return;
       const row=payload.new?.friend_id?payload.new:payload.old;
       if(payload.eventType==='DELETE'&&row?.friend_id){
-        if(incomingCall?.from===row.friend_id){incomingCall=null;render();}
+        if(incomingCall?.from===row.friend_id){clearIncomingCallTimer();incomingCall=null;render();}
         if(callPeer===row.friend_id)await endCall(false);
       }
       window.__vesselSocialLoaded=false;
@@ -1205,6 +1220,7 @@ function resetAuthenticatedRuntime() {
   voiceChannelId=null;
   voiceServerId=null;
   voiceDeafened=false;
+  clearIncomingCallTimer();
   incomingCall=null;
   callPeer=null;
   callPeerName='';
