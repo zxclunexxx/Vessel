@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Persistent DM unread state reuses server-generated direct_message notifications.
 main_path = Path('src/main.js')
 style_path = Path('src/style.css')
 main = main_path.read_text(encoding='utf-8')
