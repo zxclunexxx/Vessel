@@ -5,6 +5,17 @@ path = Path('src/main.js')
 text = path.read_text(encoding='utf-8')
 changed = False
 
+owned_markers = [
+    'if(callInboxChannel!==inbox||savedUser?.id!==user.id)return;',
+    'if((await verifyDirectMessageAccess(user,peerId))!==true)return;',
+    'if(savedUser?.id!==user.id||activeDmId!==peerId)return;',
+    'const access=await verifyDirectMessageAccess(user,invite.from);',
+    'if(incomingCall!==invite||savedUser?.id!==user.id)return;',
+]
+if all(marker in text for marker in owned_markers):
+    print('Call friendship and async context hardening already applied; nothing to change')
+    raise SystemExit(0)
+
 
 def replace_once(old, new, label):
     global text, changed
@@ -47,9 +58,6 @@ replace_once(
     'outgoing call friendship/context guard',
 )
 
-# Incoming-call timeout hardening may insert clearIncomingCallTimer() after the invite
-# snapshot. The access/session markers are the invariant this patch owns, so treat that
-# newer shape as already applied instead of depending on one exact block layout.
 acceptance_markers = [
     'const access=await verifyDirectMessageAccess(user,invite.from);',
     'if(incomingCall!==invite||savedUser?.id!==user.id)return;',
@@ -83,13 +91,7 @@ else:
         'incoming call acceptance friendship guard',
     )
 
-for marker in [
-    'if(callInboxChannel!==inbox||savedUser?.id!==user.id)return;',
-    'if((await verifyDirectMessageAccess(user,peerId))!==true)return;',
-    'if(savedUser?.id!==user.id||activeDmId!==peerId)return;',
-    'const access=await verifyDirectMessageAccess(user,invite.from);',
-    'if(incomingCall!==invite||savedUser?.id!==user.id)return;',
-]:
+for marker in owned_markers:
     if marker not in text:
         raise SystemExit(f'missing call access race hardening marker: {marker}')
 
