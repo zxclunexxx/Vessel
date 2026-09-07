@@ -1,0 +1,31 @@
+name: Vessel Release Gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: vessel-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fast-gate:
+    uses: ./.github/workflows/quality.yml
+
+  web:
+    needs: fast-gate
+    uses: ./.github/workflows/web-pages.yml
+
+  android:
+    needs: fast-gate
+    uses: ./.github/workflows/android-apk.yml
+
+  windows:
+    needs: fast-gate
+    uses: ./.github/workflows/windows-exe.yml
