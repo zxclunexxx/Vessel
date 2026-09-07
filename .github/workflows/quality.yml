@@ -46,6 +46,8 @@ jobs:
         run: python scripts/server_ownership_transfer_smoke_check.py
       - name: Fresh bootstrap server lifecycle smoke check
         run: python scripts/schema_bootstrap_smoke_check.py
+      - name: Privileged Edge Function source smoke check
+        run: python scripts/edge_function_source_smoke_check.py
       - name: Voice peer reconnect smoke check
         run: python scripts/voice_peer_reconnect_smoke_check.py
       - name: Voice controls wiring smoke check
