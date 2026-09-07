@@ -29,6 +29,8 @@ jobs:
         run: python scripts/logout_session_smoke_check.py
       - name: Realtime auth-session isolation smoke check
         run: python scripts/realtime_session_smoke_check.py
+      - name: Social DM and data Realtime resilience smoke check
+        run: python scripts/social_realtime_resilience_smoke_check.py
       - name: Private Realtime signaling security smoke check
         run: python scripts/realtime_security_smoke_check.py
       - name: DM history lifecycle smoke check
