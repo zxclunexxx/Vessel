@@ -13,9 +13,17 @@ NOTIFICATION_MARKERS = [
     "notifications=[row,...notifications.filter(item=>item.id!==row.id)];",
 ]
 
-NOTIFICATION_READ_MARKERS = [
+NOTIFICATION_REALTIME_READ_MARKERS = [
+    "event:'UPDATE',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`",
+    'notifications=notifications.map(item=>item.id===row.id?{...item,...row}:item);',
+]
+
+# Later UX patches intentionally changed which unread notifications are bulk-marked
+# (DMs stay unread until their conversation is opened). Validate the security/session
+# semantics instead of requiring the original exact unreadIds expression.
+NOTIFICATION_READ_SEMANTIC_MARKERS = [
     'const sessionUserId=user.id;',
-    'const unreadIds=notifications.filter(item=>!item.read_at).map(item=>item.id).filter(Boolean);',
+    'const unreadIds=notifications.filter(',
     'const readAt=new Date().toISOString();',
     ".eq('user_id',sessionUserId).in('id',unreadIds).is('read_at',null).select('id')",
     'if(savedUser?.id!==sessionUserId)return;',
@@ -24,33 +32,34 @@ NOTIFICATION_READ_MARKERS = [
     'notifications=notifications.map(item=>updatedIds.has(item.id)&&!item.read_at?{...item,read_at:readAt}:item);',
 ]
 
-NOTIFICATION_REALTIME_READ_MARKERS = [
-    "event:'UPDATE',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`",
-    'notifications=notifications.map(item=>item.id===row.id?{...item,...row}:item);',
-]
 
-ALL_MARKERS = [*NOTIFICATION_MARKERS, *NOTIFICATION_READ_MARKERS, *NOTIFICATION_REALTIME_READ_MARKERS]
-
-if all(marker in text for marker in ALL_MARKERS):
-    print('Notification session, Realtime, and read-state hardening already applied; nothing to change')
-    raise SystemExit(0)
+def has_notification_read_hardening():
+    return all(marker in text for marker in NOTIFICATION_READ_SEMANTIC_MARKERS)
 
 
-def replace_once(old, new, label):
+def has_notification_realtime_hardening():
+    return all(marker in text for marker in NOTIFICATION_REALTIME_READ_MARKERS)
+
+
+def replace_once(old, new, label, semantic_check=None):
     global text, changed
+    if semantic_check and semantic_check():
+        print(f'{label}: already applied in current notification UX')
+        return
     if new in text:
         print(f'{label}: already applied')
         return
     if old not in text:
-        raise SystemExit(f'{label}: expected source or patched form not found')
+        raise SystemExit(f'{label}: expected source or compatible hardened form not found')
     text = text.replace(old, new, 1)
     changed = True
+    print(f'{label}: applied')
 
 
-# The original session/Realtime migration may already be present while later
-# lifecycle patches have changed the surrounding source. In that state, do not
-# re-run anchor-based replacements: their exact old/new blocks are intentionally
-# no longer guaranteed to remain contiguous.
+if all(marker in text for marker in NOTIFICATION_MARKERS) and has_notification_read_hardening() and has_notification_realtime_hardening():
+    print('Notification session, Realtime, and read-state hardening already applied; nothing to change')
+    raise SystemExit(0)
+
 base_hardening_applied = all(marker in text for marker in NOTIFICATION_MARKERS)
 
 if base_hardening_applied:
@@ -145,6 +154,7 @@ replace_once(
   });
 """,
     'notification read snapshot/session guard',
+    semantic_check=has_notification_read_hardening,
 )
 
 replace_once(
@@ -175,11 +185,16 @@ replace_once(
       .subscribe()
 """,
     'notification realtime read-state sync',
+    semantic_check=has_notification_realtime_hardening,
 )
 
-for marker in ALL_MARKERS:
+for marker in NOTIFICATION_MARKERS:
     if marker not in text:
         raise SystemExit(f'missing notification hardening marker: {marker}')
+if not has_notification_read_hardening():
+    raise SystemExit('missing notification read snapshot/session semantics')
+if not has_notification_realtime_hardening():
+    raise SystemExit('missing notification Realtime read-state semantics')
 
 if changed:
     path.write_text(text, encoding='utf-8')
