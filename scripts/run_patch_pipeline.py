@@ -3,73 +3,49 @@ import subprocess
 import sys
 
 scripts_dir = Path(__file__).resolve().parent
+repo_dir = scripts_dir.parent
 
-preferred_order = [
-    'autonomous_patch.py',
-    'reliability_patch.py',
-    'session_patch.py',
-    'lifecycle_patch.py',
-    'attachment_context_patch.py',
-    'attachment_storage_context_patch.py',
-    'call_security_patch.py',
-    'profile_privacy_patch.py',
-    'dm_thread_security_patch.py',
-    'friend_request_policy_patch.py',
-    'voice_reconnect_patch.py',
-    'voice_switch_patch.py',
-    'voice_controls_patch.py',
-    'call_reconnect_patch.py',
-    'call_access_race_patch.py',
-    'call_network_loss_patch.py',
-    'incoming_call_timeout_patch.py',
-    'message_context_patch.py',
-    'server_context_patch.py',
-    'server_delete_realtime_patch.py',
-    'realtime_session_guard_patch.py',
-    'realtime_security_patch.py',
-    'realtime_policy_cache_patch.py',
-    'dm_unfriend_history_patch.py',
-    'notification_session_patch.py',
-    'social_sync_patch.py',
-    'dm_send_guard_patch.py',
-    'server_sync_patch.py',
-    'media_context_patch.py',
-    'channel_send_guard_patch.py',
-    'dm_identity_security_patch.py',
-    'message_mutation_rpc_patch.py',
-    'message_mutation_patch.py',
-    'dm_unread_patch.py',
-    'notification_navigation_patch.py',
-    'mobile_drawer_close_patch.py',
-]
-
-runner_name = Path(__file__).name
-ordered = []
-seen = set()
-for name in preferred_order:
-    path = scripts_dir / name
-    if path.exists():
-        ordered.append(path)
-        seen.add(name)
-
-# New feature patches are intentionally appended after the compatibility/hardening chain.
-# This keeps the historical order stable while removing the need to edit the workflow for
-# every new patch file.
-extras = sorted(
-    path for path in scripts_dir.glob('*_patch.py')
-    if path.name not in seen and path.name != runner_name
+# Patch scripts are immutable, one-shot migrations. Replaying every historical patch against
+# modern source makes the pipeline slower and causes false failures when newer guards legitimately
+# supersede an old exact-text anchor. Only patch migrations newly added on the sprint branch are
+# executable; committed main already contains and Fast Gate verifies all historical migrations.
+subprocess.run(
+    ['git', 'fetch', '--no-tags', 'origin', 'main'],
+    cwd=repo_dir,
+    check=True,
+    stdout=subprocess.DEVNULL,
 )
-ordered.extend(extras)
+merge_base = subprocess.check_output(
+    ['git', 'merge-base', 'origin/main', 'HEAD'],
+    cwd=repo_dir,
+    text=True,
+).strip()
+if not merge_base:
+    raise SystemExit('Unable to resolve merge-base with origin/main')
+
+changed = subprocess.check_output(
+    ['git', 'diff', '--diff-filter=A', '--name-only', merge_base, 'HEAD', '--', 'scripts/*_patch.py'],
+    cwd=repo_dir,
+    text=True,
+).splitlines()
+
+ordered = []
+for relative in sorted(set(changed)):
+    path = repo_dir / relative
+    if path.parent != scripts_dir or not path.name.endswith('_patch.py') or not path.is_file():
+        raise SystemExit(f'Unsafe or missing autonomous patch path: {relative}')
+    ordered.append(path)
 
 if not ordered:
-    raise SystemExit('No Vessel patch scripts found')
+    print('Vessel patch pipeline: no new patch migrations relative to main')
+    raise SystemExit(0)
 
-print('Vessel patch pipeline:')
+print(f'Vessel patch pipeline: {len(ordered)} new migration(s) relative to {merge_base[:12]}')
 for path in ordered:
     print(f'  - {path.name}')
 
 for path in ordered:
     print(f'\n=== {path.name} ===', flush=True)
-    subprocess.run([sys.executable, str(path)], cwd=scripts_dir.parent, check=True)
+    subprocess.run([sys.executable, str(path)], cwd=repo_dir, check=True)
 
 print('\nVessel patch pipeline completed successfully')
