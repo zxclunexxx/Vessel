@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Mobile channel drawer must always have an explicit in-panel close control.
 main_path = Path('src/main.js')
 style_path = Path('src/style.css')
 main = main_path.read_text(encoding='utf-8')
