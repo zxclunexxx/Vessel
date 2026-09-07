@@ -487,6 +487,11 @@ create policy "friends can send dms" on public.direct_messages for insert to aut
 );
 create policy "senders can update dms" on public.direct_messages for update to authenticated using(sender_id=(select auth.uid())) with check(sender_id=(select auth.uid()));
 
+-- Direct-message routing/identity is immutable from the browser.
+-- Senders may edit content or soft-delete their own messages, but cannot retarget an existing row.
+revoke update on table public.direct_messages from authenticated;
+grant update (body, attachments, edited_at, deleted_at) on table public.direct_messages to authenticated;
+
 create policy "owners can read own server invites" on public.server_invites for select to authenticated using(created_by=(select auth.uid()));
 create policy "owners can create server invites" on public.server_invites for insert to authenticated with check(
   created_by=(select auth.uid()) and exists(select 1 from public.servers s where s.id=server_invites.server_id and s.owner_id=(select auth.uid()))
