@@ -63,3 +63,5 @@ text = text.replace(old_interval, marker, 1)
 
 main_path.write_text(text, encoding='utf-8')
 print('Applied Vessel Full QA interaction/performance patch')
+
+# Touching this migration after smoke-alignment intentionally retriggers the autonomous verifier.
