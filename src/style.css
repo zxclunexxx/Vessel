@@ -22,3 +22,5 @@
 .message-content{min-width:0;flex:1}.message-actions{display:inline-flex;gap:3px;margin-left:auto;opacity:0;transition:.16s}.message:hover .message-actions,.message-actions:focus-within{opacity:1}.message-actions button{border:0;background:#252a38;color:#8f97ab;width:26px;height:26px;border-radius:7px;cursor:pointer;font:600 14px Inter}.message-actions button:hover{background:#32394c;color:#fff}.message-actions button[data-delete-message]:hover{background:#3b202c;color:#ff9db2}@media(max-width:760px){.message-actions{opacity:1}}
 
 .dialog-list-button{width:100%;text-align:left;border:0;color:inherit;font:inherit;cursor:pointer}.dialog-list-button:hover{background:rgba(255,255,255,.07)}
+
+.mobile-drawer-close{display:none;border:0;background:none;color:#9ca4b8;font-size:26px;line-height:1;cursor:pointer;padding:4px 7px;border-radius:8px}.mobile-drawer-close:hover{background:#292e3e;color:#fff}@media(max-width:600px){.mobile-drawer-close{display:grid;place-items:center}.channels .brand{padding-right:10px}}

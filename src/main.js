@@ -1430,7 +1430,7 @@ function render() {
     <main class="shell">
       <aside class="servers"><button class="server home-tab ${friendsOpen?'selected':''}" id="friends-tab" title="Друзья">👥</button>${servers.map((s,i) => `<button class="server ${!friendsOpen&&i===activeServerIndex?'selected':''} ${s.add ? 'add' : ''}" data-server-index="${i}" title="${escapeHtml(s.name)}">${escapeHtml(s.icon)}</button>`).join('')}</aside>
       <aside class="channels">
-        <div class="brand"><span class="brand-mark">◈</span><span>${friendsOpen?'Друзья':escapeHtml(activeServer?.name || 'Vessel')}</span><button class="more ${friendsOpen?'hidden':''}">•••</button></div>
+        <div class="brand"><span class="brand-mark">◈</span><span>${friendsOpen?'Друзья':escapeHtml(activeServer?.name || 'Vessel')}</span><button class="more ${friendsOpen?'hidden':''}">•••</button><button class="mobile-drawer-close" id="mobile-nav-close" type="button" title="Закрыть каналы" aria-label="Закрыть каналы">×</button></div>
         <div class="user-card"><div class="avatar user-avatar">${escapeHtml(user.name?.[0]?.toUpperCase()||'?')}</div><div><b>${escapeHtml(user.name)}</b><small>${escapeHtml(statusLabel(user.status))}</small></div><button class="icon-btn" id="profile-settings" title="Настройки">⚙</button></div>
         <section class="channel-section"><div class="section-title">ЛИЧНЫЕ СООБЩЕНИЯ <button id="dm-add">＋</button></div>
           ${dmList}
@@ -1608,7 +1608,9 @@ function render() {
   });
   const modal = document.querySelector('#settings-modal');
   document.querySelector('#profile-settings').addEventListener('click', () => modal.classList.remove('hidden'));
-  document.querySelector('#mobile-nav')?.addEventListener('click',()=>document.querySelector('.channels')?.classList.toggle('mobile-open'));
+  const setMobileDrawerOpen=open=>document.querySelector('.channels')?.classList.toggle('mobile-open',Boolean(open));
+  document.querySelector('#mobile-nav')?.addEventListener('click',()=>setMobileDrawerOpen(!document.querySelector('.channels')?.classList.contains('mobile-open')));
+  document.querySelector('#mobile-nav-close')?.addEventListener('click',()=>setMobileDrawerOpen(false));
   document.querySelector('.more').addEventListener('click', async () => {
     const server=getActiveServer();
     if(!server?.dbId){vesselNotice('Сначала выбери сервер.','error');return;}
