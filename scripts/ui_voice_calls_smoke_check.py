@@ -20,7 +20,7 @@ checks = {
     'voice participant cards': 'voice-participant-grid' in main and 'voiceParticipants' in main,
     'incoming call redesign': 'incoming-call-card' in main and 'incoming-call-orbit' in main and 'incoming-call-wave' in main,
     'verified ICE recovery preserved': "if(state==='connected'){clearCallDisconnectTimer();callIceRestartAttempts=0;callIceRestartInFlight=false;return;}" in main and "if(['failed','disconnected'].includes(state))scheduleCallDisconnectCleanup(connection,user,peerId,video);" in main,
-    'call stage css': '.rtc-stage{' in style and '.call-stage' in style,
+    'call stage css': '.rtc-stage{' in style and '.audio-call-focus' in style and '.video-mode' in style,
     'video stage css': '.video-stage-grid' in style and '.remote-video-tile' in style and '.local-preview' in style,
     'voice cards css': '.voice-participant-card' in style and '.participant-avatar' in style,
     'speaking glow css': '.is-speaking' in style and 'rtcSpeakingPulse' in style,
