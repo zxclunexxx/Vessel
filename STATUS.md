@@ -15,8 +15,8 @@ Vessel uses batched autonomous sprint branches instead of treating every small f
 
 ## Last known stable main
 
-- Commit: `327527a8b8707b88297ff526c413d9f90ec03d31`
-- Release Gate run: `34159920341`
+- Commit: `b285fc4ba9f01a03ee3e7bc1355e2330473ea4bc`
+- Release Gate run: `34161499648`
 - Fast Gate: verified green
 - Web build/deploy: verified green
 - Android debug APK: verified green and artifact uploaded
@@ -26,47 +26,48 @@ Vessel uses batched autonomous sprint branches instead of treating every small f
 - UI Batch 1 liquid-glass foundation: merged as PR #5
 - Auth email rate-limit resilience + production SMTP guide: merged as PR #6
 - UI Batch 2 Messaging + Social: merged as PR #7
+- UI Batch 3 Voice + Calls: merged as PR #8
 - Live Supabase `rtc-config`: ACTIVE and JWT-protected; real TURN relay still requires external TURN infrastructure and server-side secrets.
 
 ## Current sprint
 
-Branch: `autonomous/ui-voice-calls-batch-v2`
+Branch: `autonomous/ui-motion-polish-batch`
 
-UI Batch 3 redesigns Voice + Calls while preserving the verified WebRTC signaling, ICE recovery and authorization boundaries:
+UI Batch 4 Motion + Polish unifies Vessel interaction behavior without changing data access, authorization or RTC transport:
 
-1. Replace the old inline call controls with dedicated immersive audio-call, video-call and voice-room stages.
-2. Add a floating glass control dock while preserving the existing call/voice action IDs and handlers.
-3. Add a focused audio-call scene with participant avatar, ambient orbits, waveform motion and self microphone state.
-4. Add a full central video-call stage with a large remote video tile, participant fallback and mirrored local preview with camera-off fallback.
-5. Add a live call duration timer and connection-state labels for calling, connecting, connected and reconnecting states.
-6. Surface reconnect banners by observing the existing call/voice recovery state instead of modifying the verified recovery state machine.
-7. Upgrade voice rooms with participant cards, empty state, join/leave controls and dedicated microphone/deafen treatment.
-8. Add client-side speaking detection with Web Audio `AnalyserNode`; active speakers receive presence glow and level animation without recording or uploading analyser data.
-9. Redesign the incoming-call modal with call type, animated orbit/wave treatment and preserved accept/reject actions.
-10. Add mobile layouts and `prefers-reduced-motion` fallbacks for stage, speaking, incoming-call and reconnect motion.
-11. Preserve the single `#join-voice` source-control invariant used by the existing voice-controls regression guard.
-12. Keep the exact verified call ICE-restart handler markers unchanged.
-13. Extend the centralized Fast Gate from 30 to 31 checks with `ui_voice_calls_smoke_check.py`.
+1. Add context-aware transitions for channel, DM, Friends and RTC scene changes while avoiding animation on ordinary realtime rerenders.
+2. Add transform/opacity entrance motion to headers, content panes, composer and call/voice stages.
+3. Standardize hover and press feedback across primary actions, dialogs, attachments, social controls, call controls and utility buttons.
+4. Restrict hover-only effects to fine-pointer devices so touch interfaces do not retain sticky hover states.
+5. Upgrade modal presentation with a consistent glass highlight, backdrop entrance and spring-like card entrance.
+6. Present standard modals as bottom sheets on small mobile screens while leaving the dedicated incoming-call animation isolated.
+7. Replace overlapping notices with an accessible stacked toast system supporting info, success and error tones, manual dismiss and a lifetime indicator.
+8. Add a real mobile channel-drawer scrim that closes the drawer on tap and keeps body/drawer state synchronized across rerenders.
+9. Add safe-area spacing, `100dvh` sizing and larger mobile touch targets.
+10. Reduce expensive blur levels on small screens and add paint containment to expensive visual cards/tiles for a lighter rendering budget.
+11. Keep new animation transform/opacity oriented and disable Batch 4 motion under `prefers-reduced-motion`.
+12. Preserve the exact verified call ICE-recovery markers and all earlier UI batch markers.
+13. Extend the centralized Fast Gate from 31 to 32 checks with `ui_motion_polish_smoke_check.py`.
 
 ## Current sprint verification
 
-- Autonomous runtime migration: passed.
-- Autonomous style migration: passed.
-- Generated Voice + Calls runtime is present in `src/main.js` under `VESSEL_UI_VOICE_CALLS_V1`.
-- Generated Voice + Calls visual layer is present in `src/style.css` under `VESSEL_UI_VOICE_CALLS_V1`.
-- Existing 30 regression checks continue to pass, including voice controls, voice peer reconnect, TURN-ready transport, call ICE restart and call-session cleanup.
-- Dedicated Voice + Calls visual regression check passes as part of the 31-check Fast Gate.
-- Final pre-status sprint HEAD `503a6aa11d66f5b4df8307ee2544a2f226c80519`: Fast Gate success.
+- Autonomous Motion + Polish migration: passed.
+- Generated runtime is present in `src/main.js` under `VESSEL_UI_MOTION_POLISH_V1`.
+- Generated visual layer is present in `src/style.css` under `VESSEL_UI_MOTION_POLISH_V1`.
+- Existing 31 regression checks continue to pass, including social UI, voice/calls UI, voice reconnect, TURN-ready transport, call ICE restart and call-session cleanup.
+- Dedicated Motion + Polish regression check passes as part of the 32-check Fast Gate.
+- Pre-status sprint HEAD `7bd51edf33bddb73354444481aeec974aabaf618`: Fast Gate success.
 - JavaScript syntax: passed.
+- Locked dependency install: passed.
 - Dependency audit: passed.
 - Production build: passed.
-- No SQL, RLS, Supabase schema or policy changes are part of this batch.
+- No SQL, RLS, Supabase schema, policy, authentication or authorization changes are part of this batch.
 - A final Fast Gate on this status-updated sprint HEAD is required before PR.
 - After PR Fast Gate, squash-merge and run exactly one Release Gate for Web, Android APK and Windows EXE.
 
-## Next UI batch
+## Next stage
 
-Motion + Polish: transitions, microinteractions, ambient motion, modal/toast polish, mobile refinement, reduced-motion validation and performance cleanup.
+Full QA and release hardening: two-account social/DM flows, channel/server lifecycle, call/voice recovery, responsive/device validation, artifact installation checks, accessibility pass and final production-readiness cleanup.
 
 ## Known blockers / external dependencies
 
