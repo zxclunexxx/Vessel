@@ -5,6 +5,9 @@ path = Path('src/main.js')
 text = path.read_text(encoding='utf-8')
 changed = False
 
+connected_state = "if(state==='connected'){clearCallDisconnectTimer();callIceRestartAttempts=0;callIceRestartInFlight=false;return;}"
+reconnect_callsite = "if(['failed','disconnected'].includes(state))scheduleCallDisconnectCleanup(connection,user,peerId,video);"
+
 required = [
     'let callInitiator = false;',
     'let callIceRestartAttempts = 0;',
@@ -12,7 +15,8 @@ required = [
     'async function attemptCallIceRestart(connection,user,peerId,video)',
     'connection.createOffer({iceRestart:true})',
     "sendCallSignal(user,peerId,{type:'offer',description:callOffer,restart:true},video)",
-    'scheduleCallDisconnectCleanup(connection,user,peerId,video)',
+    connected_state,
+    reconnect_callsite,
     'callInitiator=true;',
     'callInitiator=false;',
 ]
@@ -99,7 +103,7 @@ old_state = '''    if(state==='connected'){clearCallDisconnectTimer();return;}
 new_state = '''    if(state==='connected'){clearCallDisconnectTimer();callIceRestartAttempts=0;callIceRestartInFlight=false;return;}
     if(state==='closed'){clearCallDisconnectTimer();return;}
     if(['failed','disconnected'].includes(state))scheduleCallDisconnectCleanup(connection,user,peerId,video);'''
-if 'scheduleCallDisconnectCleanup(connection,user,peerId,video)' not in text:
+if reconnect_callsite not in text or connected_state not in text:
     if old_state not in text:
         raise SystemExit('call ICE connection-state anchor not found')
     text = text.replace(old_state, new_state, 1)
