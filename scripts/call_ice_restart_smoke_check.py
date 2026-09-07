@@ -10,6 +10,7 @@ required = [
     'connection.createOffer({iceRestart:true})',
     "sendCallSignal(user,peerId,{type:'offer',description:callOffer,restart:true},video)",
     'scheduleCallDisconnectCleanup(connection,user,peerId,video)',
+    "if(['failed','disconnected'].includes(state))scheduleCallDisconnectCleanup(connection,user,peerId,video);",
     'callInitiator=true;',
     'callInitiator=false;',
     'callIceRestartAttempts>=2',
