@@ -186,13 +186,67 @@ function vesselDialog({title,message='',input=false,value='',placeholder='',choi
 function vesselPrompt(title,value='',placeholder='') { return vesselDialog({title,input:true,value,placeholder}); }
 function vesselChoice(title,choices,message='') { return vesselDialog({title,message,choices}); }
 async function vesselConfirm(title,message='') { return (await vesselChoice(title,[{label:'Отмена',value:'no'},{label:'Подтвердить',value:'yes',danger:true}],message))==='yes'; }
+/* VESSEL_UI_MOTION_POLISH_V1 */
+function ensureVesselToastStack() {
+  let stack=document.querySelector('#vessel-toast-stack');
+  if(stack)return stack;
+  stack=document.createElement('div');
+  stack.id='vessel-toast-stack';
+  stack.className='vessel-toast-stack';
+  stack.setAttribute('aria-live','polite');
+  stack.setAttribute('aria-atomic','false');
+  document.body.appendChild(stack);
+  return stack;
+}
 function vesselNotice(message,type='info') {
+  const tone=['success','error','info'].includes(type)?type:'info';
+  const stack=ensureVesselToastStack();
   const toast=document.createElement('div');
-  toast.className=`vessel-toast ${type}`;
-  toast.textContent=message;
-  document.body.appendChild(toast);
+  toast.className=`vessel-toast ${tone}`;
+  toast.setAttribute('role',tone==='error'?'alert':'status');
+  const icon=document.createElement('span');
+  icon.className='vessel-toast-icon';
+  icon.textContent=tone==='success'?'✓':tone==='error'?'!':'i';
+  const copy=document.createElement('span');
+  copy.className='vessel-toast-copy';
+  copy.textContent=String(message||'');
+  const close=document.createElement('button');
+  close.type='button';
+  close.className='vessel-toast-close';
+  close.setAttribute('aria-label','Закрыть уведомление');
+  close.textContent='×';
+  toast.append(icon,copy,close);
+  stack.appendChild(toast);
+  let dismissed=false;
+  const dismiss=()=>{
+    if(dismissed)return;
+    dismissed=true;
+    toast.classList.remove('show');
+    toast.classList.add('leaving');
+    setTimeout(()=>{
+      toast.remove();
+      if(!stack.childElementCount)stack.remove();
+    },240);
+  };
+  close.addEventListener('click',dismiss);
   requestAnimationFrame(()=>toast.classList.add('show'));
-  setTimeout(()=>{toast.classList.remove('show');setTimeout(()=>toast.remove(),180);},3200);
+  setTimeout(dismiss,3600);
+}
+function triggerVesselViewMotion(previousContext,currentContext) {
+  if(previousContext===currentContext)return;
+  if(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)return;
+  const targets=[
+    ['.chat-head','view-motion-head'],
+    ['.messages','view-motion-content'],
+    ['.composer:not(.hidden)','view-motion-composer'],
+    ['.rtc-stage','view-motion-stage']
+  ];
+  requestAnimationFrame(()=>targets.forEach(([selector,className])=>{
+    const node=document.querySelector(selector);
+    if(!node)return;
+    node.classList.add(className);
+    node.addEventListener('animationend',()=>node.classList.remove(className),{once:true});
+  }));
 }
 /* VESSEL_AUTH_EMAIL_RESILIENCE_V1 */
 let signupEmailCooldownUntil = 0;
@@ -1906,6 +1960,7 @@ async function verifyChannelAccess(user,channelId,{notify=true}={}){
   return false;
 }
 function render() {
+  document.body.classList.remove('mobile-drawer-open');
   const previousMessagesPane=document.querySelector('.messages');
   const previousMessageContext=lastRenderedMessageContext;
   const previousMessageScroll=previousMessagesPane?{
@@ -2042,6 +2097,7 @@ function render() {
     }
   }
   lastRenderedMessageContext=currentMessageContext;
+  triggerVesselViewMotion(previousMessageContext,currentMessageContext);
   document.querySelector('.composer').addEventListener('submit', async e => {
     e.preventDefault();
     const input=e.currentTarget.querySelector('input');
@@ -2202,7 +2258,25 @@ function render() {
   });
   const modal = document.querySelector('#settings-modal');
   document.querySelector('#profile-settings').addEventListener('click', () => modal.classList.remove('hidden'));
-  const setMobileDrawerOpen=open=>document.querySelector('.channels')?.classList.toggle('mobile-open',Boolean(open));
+  const setMobileDrawerOpen=open=>{
+    const channels=document.querySelector('.channels');
+    const next=Boolean(open&&channels);
+    channels?.classList.toggle('mobile-open',next);
+    document.body.classList.toggle('mobile-drawer-open',next);
+    let scrim=document.querySelector('.mobile-drawer-scrim');
+    if(next&&!scrim){
+      scrim=document.createElement('button');
+      scrim.type='button';
+      scrim.className='mobile-drawer-scrim';
+      scrim.setAttribute('aria-label','Закрыть меню каналов');
+      document.querySelector('.shell')?.appendChild(scrim);
+      scrim.addEventListener('click',()=>setMobileDrawerOpen(false));
+      requestAnimationFrame(()=>scrim?.classList.add('show'));
+    }else if(!next&&scrim){
+      scrim.classList.remove('show');
+      setTimeout(()=>scrim?.remove(),180);
+    }
+  };
   document.querySelector('#mobile-nav')?.addEventListener('click',()=>setMobileDrawerOpen(!document.querySelector('.channels')?.classList.contains('mobile-open')));
   document.querySelector('#mobile-nav-close')?.addEventListener('click',()=>setMobileDrawerOpen(false));
   document.querySelector('.more').addEventListener('click', async () => {
