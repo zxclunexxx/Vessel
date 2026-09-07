@@ -1,5 +1,12 @@
-const {app, BrowserWindow, session} = require('electron');
+const {app, BrowserWindow, session, shell} = require('electron');
 const path = require('node:path');
+
+function openExternalHttps(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === 'https:') void shell.openExternal(parsed.href);
+  } catch {}
+}
 
 function createWindow() {
   const window = new BrowserWindow({
@@ -16,13 +23,28 @@ function createWindow() {
     },
   });
 
+  window.webContents.setWindowOpenHandler(({url}) => {
+    openExternalHttps(url);
+    return {action: 'deny'};
+  });
+
+  window.webContents.on('will-navigate', (event, url) => {
+    if (url === window.webContents.getURL()) return;
+    event.preventDefault();
+    openExternalHttps(url);
+  });
+
   window.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 }
 
 app.whenReady().then(() => {
-  const allowMedia = (_webContents, permission) => ['media', 'notifications'].includes(permission);
-  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => callback(allowMedia(_webContents, permission)));
-  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => allowMedia(_webContents, permission));
+  const allowMedia = (webContents, permission) => {
+    const owner = BrowserWindow.fromWebContents(webContents);
+    const isLocalVesselWindow = Boolean(owner && webContents.getURL().startsWith('file://'));
+    return isLocalVesselWindow && ['media', 'notifications'].includes(permission);
+  };
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => callback(allowMedia(webContents, permission)));
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => allowMedia(webContents, permission));
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
