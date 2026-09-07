@@ -55,20 +55,26 @@ decline_block = main[decline_start:decline_start + 1200]
 if ".eq('status','pending')" not in decline_block or 'if(!declined)' not in decline_block:
     raise SystemExit('Decline friend-request path can still report stale zero-row success')
 
-required_schema = [
-    'create or replace function public.vessel_dm_threads()',
-    'returns table(peer_id uuid,username text,avatar_color text,status text,last_message_at timestamptz)',
+rpc_start = schema.find('create or replace function public.vessel_dm_threads()')
+rpc_grant = 'grant execute on function public.vessel_dm_threads() to authenticated;'
+rpc_end = schema.find(rpc_grant, rpc_start)
+if rpc_start < 0 or rpc_end < 0:
+    raise SystemExit('Secure DM-thread bootstrap RPC block not found')
+rpc_block = schema[rpc_start:rpc_end + len(rpc_grant)]
+rpc_lower = rpc_block.lower()
+required_rpc = [
+    'returns table(peer_id uuid, username text, avatar_color text, status text, last_message_at timestamptz)',
+    'language sql',
     'security invoker',
     "set search_path='pg_catalog','public'",
     'dm.deleted_at is null',
     'revoke all on function public.vessel_dm_threads() from public,anon;',
-    'grant execute on function public.vessel_dm_threads() to authenticated;',
+    rpc_grant,
 ]
-for marker in required_schema:
-    if marker not in schema:
+for marker in required_rpc:
+    if marker.lower() not in rpc_lower:
         raise SystemExit(f'Missing secure DM-thread bootstrap marker: {marker}')
-
-if 'security definer' in schema[schema.find('create or replace function public.vessel_dm_threads()'):schema.find('-- Service-role-only RPCs', schema.find('create or replace function public.vessel_dm_threads()'))]:
+if 'security definer' in rpc_lower:
     raise SystemExit('vessel_dm_threads bootstrap RPC must not bypass RLS')
 
 print('Vessel social/DM/data-Realtime resilience smoke check passed')
