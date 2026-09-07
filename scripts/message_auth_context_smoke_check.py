@@ -5,14 +5,16 @@ main = Path('src/main.js').read_text(encoding='utf-8')
 history_start = main.find('async function loadDirectMessages(user, friendId)')
 if history_start < 0:
     raise SystemExit('DM history loader is missing')
-history = main[history_start:history_start + 1800]
+history = main[history_start:history_start + 2000]
 for marker in [
     'const dmLoadUserId=user.id;',
+    'const revision=++dmMessagesSyncRevision;',
     'if(savedUser?.id!==dmLoadUserId)return;',
-    'if(savedUser?.id!==dmLoadUserId||activeDmId!==friendId)return;',
+    'if(savedUser?.id!==dmLoadUserId||revision!==dmMessagesSyncRevision||activeDmId!==friendId)return;',
+    "if(error){window.__vesselDmLoaded=false;",
 ]:
     if marker not in history:
-        raise SystemExit(f'DM history auth-session guard missing: {marker}')
+        raise SystemExit(f'DM history auth-session/revision guard missing: {marker}')
 
 access_start = main.find('async function verifyDirectMessageAccess(user,peerId')
 if access_start < 0:
