@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Session reset must clear all ICE-recovery state so a new login cannot inherit a stale call timer.
 path = Path('src/main.js')
 text = path.read_text(encoding='utf-8')
 changed = False
