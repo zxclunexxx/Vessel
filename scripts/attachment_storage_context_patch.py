@@ -27,7 +27,7 @@ old_function = """async function uploadVesselFile(file, user) {
   return {name:file.name,path:objectPath,type:file.type||'application/octet-stream',size:file.size};
 }"""
 
-new_function = """async function uploadVesselFile(file, user, context) {
+new_function = r"""async function uploadVesselFile(file, user, context) {
   if (!supabase || !user?.id) { vesselNotice('Для загрузки файлов нужен настоящий аккаунт.','error'); return null; }
   if(file.size>25*1024*1024){vesselNotice('Максимальный размер файла — 25 МБ.','error');return null;}
   const storageContext=String(context||'');
