@@ -45,9 +45,27 @@ jobs:
         working-directory: android
         run: ./gradlew assembleDebug
 
+      - name: Record APK integrity metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-metadata
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          sha256sum "$APK" | sed "s#  $APK#  app-debug.apk#" > release-metadata/android-apk.sha256
+          cat > release-metadata/android-apk-metadata.txt <<EOF
+          commit=${GITHUB_SHA}
+          artifact=app-debug.apk
+          build_variant=debug
+          signing=android-debug-certificate
+          production_ready=false
+          EOF
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Vessel-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            release-metadata/android-apk.sha256
+            release-metadata/android-apk-metadata.txt
           if-no-files-found: error
