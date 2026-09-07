@@ -1,66 +1,59 @@
 # Vessel autonomous status
 
-Updated: 2026-09-06
+Updated: 2026-09-07
 
-## Current verified runtime
+## Current runtime
 
-Latest application commit validated by the autonomous production-build path: `962941d102323fa478262914002e6207a572a0bd`.
-
-Vessel is running on the authenticated Supabase-backed runtime rather than the old local demo. Mark/Liza/default-message placeholders and fake local servers/channels are removed. Runtime smoke checks reject known demo placeholders and blocking browser `prompt()`, `confirm()` and `alert()` flows.
+Vessel is running on the authenticated Supabase-backed runtime rather than the old local demo. Mark/Liza/default-message placeholders and fake local runtime data are removed. Runtime smoke checks reject known demo placeholders and blocking browser `prompt()`, `confirm()` and `alert()` flows.
 
 Verified features in code/database:
 
-- Supabase Auth session bootstrap and profile loading;
-- automatic real profile + starter server creation after signup;
+- Supabase Auth session bootstrap, login/logout and profile loading;
+- registration creates the real profile only; it no longer creates the legacy `Мой Vessel` demo/bootstrap server;
 - real server memberships, text/voice channels and member roster;
 - server create/join/leave/delete, invitation redemption, roles and member removal;
-- friend search, requests, accept/decline, removal and database-level protection against reciprocal pending-request races;
+- friend search, requests, accept/decline/cancel, removal and reciprocal pending-request protection;
 - direct-message history based on real conversations rather than the current friend list;
 - historical DMs remain readable to their participants after unfriend, while new messages/calls are disabled until friendship is restored;
 - realtime refresh for social state, DM threads/messages, server memberships, channels, channel messages, profile changes and server rename/icon changes;
 - private attachments opened with short-lived signed URLs;
-- audio/video DM calling with decline/busy/hangup, mic/camera controls and a 30-second unanswered-call timeout;
+- audio/video DM calling with decline/busy/hangup, mic/camera controls and unanswered-call timeout;
 - WebRTC voice rooms with presence/signaling and room switching;
 - native Vessel dialogs/toasts, message search, notifications and emoji picker;
 - responsive mobile channel drawer;
 - latest 100 channel/DM messages loaded in chronological order;
-- user-controlled text escaped before insertion into the large HTML template;
-- profile writes use the database-confirmed result and report duplicate usernames clearly.
-
-## Automated verification
-
-The autonomous patch workflow is idempotent and validates generated application/schema changes with:
-
-1. patch application;
-2. JavaScript syntax check;
-3. dependency install;
-4. production Vite build;
-5. commit only after validation;
-6. explicit dispatch of Quality Gate, Web deploy, Android APK and Windows EXE workflows.
-
-For `962941d102323fa478262914002e6207a572a0bd`, the autonomous production build completed successfully and the Vessel Quality Gate also completed successfully, including the authenticated runtime smoke check, JavaScript syntax check and production build. Web/APK/EXE distributable workflows were dispatched for the same commit.
+- user-controlled text escaped before insertion into the large HTML template.
 
 ## Database and RLS verification
 
-Public Vessel tables keep RLS enabled. Existing policies continue to enforce participant/friend/server-membership ownership rules instead of widening access to make features work.
+Public Vessel tables keep RLS enabled. Policies continue to enforce participant/friend/server-membership ownership rules instead of widening access to make features work.
 
-Additional hardening completed in this sprint:
+Hardening completed on 2026-09-07:
 
-- a symmetric partial unique index prevents two opposite pending friend requests for the same pair;
-- `vessel_dm_threads()` returns only the safe peer fields needed for conversation discovery and scopes results to `auth.uid()`;
-- anonymous EXECUTE permission on that SECURITY DEFINER RPC is explicitly revoked;
-- the checked-in `server/schema.sql` snapshot is updated by the same verified autonomous path as application changes.
+- `friend_requests.sender_id`, `receiver_id` and row identity are immutable to browser clients; authenticated clients can update only `status` and `updated_at`;
+- `servers` browser updates are limited to `name` and `icon`;
+- `channels` browser updates are limited to `name`, `kind` and `position`;
+- `server_members` browser updates are limited to `role`;
+- `notifications` browser updates are limited to `read_at`;
+- anonymous direct table privileges were removed from the server/channel/member/notification surfaces used only by authenticated runtime;
+- untouched auto-generated `Мой Vessel` bootstrap servers were removed, while user-created/used servers were preserved;
+- the live `handle_new_user()` trigger now creates only a profile, so future registrations start cleanly with an empty server list.
 
-The latest Security Advisor check no longer reports anonymous access to `vessel_dm_threads()`. Its remaining function warning is the intentional authenticated EXECUTE permission needed by signed-in clients. Supabase Auth leaked-password protection is still disabled and should be enabled as an account-level hardening step.
+The live Supabase Security Advisor currently reports only the account-level warning that leaked-password protection is disabled. No RLS policy was weakened during these fixes.
 
-## Remaining true end-to-end work
+## Build / CI state
 
-The production project now contains real application data, so database-backed social and DM flows are no longer purely prototype paths. The next highest-value work is broader two-client/browser/device verification of realtime edge cases and call lifecycle behavior.
+Main continues to run the Vessel Quality Gate plus Web, Android APK and Windows EXE workflows on changes. Database changes in this sprint are checked in as migrations under `server/migrations/` so the repository records the live hardening.
 
-WebRTC currently uses a public STUN server only. A TURN relay is still required for dependable calls/voice across restrictive NAT and firewall combinations; TURN credentials must not be hard-coded or committed.
+## Remaining highest-value work
 
-Call signaling currently uses Supabase Realtime Broadcast. Busy/decline/hangup/reconnect cleanup exists, but sender identity in Broadcast payloads is still client-supplied. Further hardening should move call authorization/signaling toward a server-verifiable, friendship-scoped design rather than trusting payload identity.
+1. Broader two-client/browser/device verification of friend, realtime DM, attachment and membership race conditions.
+2. Call signaling hardening: Realtime Broadcast sender identity is still client-supplied. Move toward a server-verifiable friendship-scoped signaling design.
+3. TURN relay support for dependable WebRTC across restrictive NAT/firewall combinations; TURN credentials must never be committed.
+4. Voice-channel reconnect/presence testing across abrupt tab/app closes and network loss.
+5. Mobile/desktop native permission and lifecycle verification for microphone, camera, background/foreground and app close.
+6. Enable Supabase leaked-password protection in Auth settings when account-level configuration is available.
 
 ## Repository cleanup
 
-Old one-off maintenance/social-upgrade workflows and obsolete prototype patch paths are not used for current changes. `scripts/autonomous_patch.py` is the active guarded patch path and `scripts/runtime_smoke_check.py` is the authenticated runtime gate.
+`scripts/autonomous_patch.py` remains the guarded patch path and `scripts/runtime_smoke_check.py` remains the authenticated runtime gate. New database changes should remain mirrored in `server/migrations/` and the schema snapshot should be refreshed by the normal guarded schema-sync path.
