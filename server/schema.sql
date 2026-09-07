@@ -338,7 +338,7 @@ $$;
 revoke all on function public.vessel_redeem_server_invite(text,uuid) from public,anon,authenticated;
 grant execute on function public.vessel_redeem_server_invite(text,uuid) to service_role;
 
-create or replace function public.vessel_transfer_server_ownership(target_server uuid, target_owner uuid)
+create or replace function public.vessel_transfer_server_ownership(target_server uuid, target_owner uuid, actor_user uuid)
 returns jsonb
 language plpgsql
 security definer
@@ -347,11 +347,8 @@ as $$
 declare
   current_owner uuid;
 begin
-  if (select auth.uid()) is null then
-    raise exception 'Authentication required' using errcode='42501';
-  end if;
-  if target_owner is null then
-    raise exception 'Target owner is required' using errcode='22023';
+  if actor_user is null or target_owner is null then
+    raise exception 'Actor and target owner are required' using errcode='22023';
   end if;
   select s.owner_id into current_owner
   from public.servers s
@@ -360,7 +357,7 @@ begin
   if not found then
     raise exception 'Server not found' using errcode='P0002';
   end if;
-  if current_owner<>(select auth.uid()) then
+  if current_owner<>actor_user then
     raise exception 'Only the current owner can transfer ownership' using errcode='42501';
   end if;
   if target_owner=current_owner then
@@ -388,8 +385,8 @@ begin
   return jsonb_build_object('ok',true,'server_id',target_server,'owner_id',target_owner,'previous_owner_id',current_owner,'already_owner',false);
 end;
 $$;
-revoke all on function public.vessel_transfer_server_ownership(uuid,uuid) from public,anon;
-grant execute on function public.vessel_transfer_server_ownership(uuid,uuid) to authenticated,service_role;
+revoke all on function public.vessel_transfer_server_ownership(uuid,uuid,uuid) from public,anon,authenticated;
+grant execute on function public.vessel_transfer_server_ownership(uuid,uuid,uuid) to service_role;
 
 -- RLS --------------------------------------------------------------------------
 alter table public.profiles enable row level security;

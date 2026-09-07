@@ -1797,7 +1797,7 @@ function render() {
     if(action==='4'){
       if(!await vesselConfirm(`Передать сервер пользователю ${member.username}?`,'Ты перестанешь быть владельцем и станешь обычным участником.'))return;
       const serverId=server.dbId;
-      const {data,error}=await supabase.rpc('vessel_transfer_server_ownership',{target_server:serverId,target_owner:memberId});
+      const {data,error}=await supabase.functions.invoke('transfer-server-ownership',{body:{server_id:serverId,target_owner:memberId}});
       if(error||data?.ok!==true){vesselNotice(`Не удалось передать сервер: ${error?.message||'неизвестная ошибка'}`,'error');return;}
       window.__vesselServersLoaded=false;
       window.__vesselMembersServerId=null;
