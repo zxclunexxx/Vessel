@@ -10,8 +10,7 @@ HARDENED_MARKERS = [
     'const accessUserId=user.id;',
     'if(savedUser?.id!==accessUserId)return null;',
     'const dmLoadUserId=user.id;',
-    'const revision=++dmMessagesSyncRevision;',
-    'if(savedUser?.id!==dmLoadUserId||revision!==dmMessagesSyncRevision||activeDmId!==friendId)return;',
+    'if(savedUser?.id!==dmLoadUserId||activeDmId!==friendId)return;',
     'const sendSessionUserId=user.id;',
     'if(savedUser?.id!==sendSessionUserId)return;',
     'const attachmentSessionUserId=user.id;',
@@ -19,7 +18,7 @@ HARDENED_MARKERS = [
 ]
 
 if all(marker in text for marker in HARDENED_MARKERS):
-    print('DM/channel send and revision-safe history auth-session hardening already applied; nothing to change')
+    print('DM/channel send and history auth-session hardening already applied; nothing to change')
     raise SystemExit(0)
 
 
