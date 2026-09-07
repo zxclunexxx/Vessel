@@ -14,7 +14,7 @@ with check(
   and not exists(select 1 from public.friendships f where f.user_id=(select auth.uid()) and f.friend_id=friend_requests.receiver_id)
 );"""
 
-new = """create policy \"participants can update friend requests\" on public.friend_requests for update to authenticated
+consolidated = """create policy \"participants can update friend requests\" on public.friend_requests for update to authenticated
 using(
   receiver_id=(select auth.uid())
   or (sender_id=(select auth.uid()) and status in ('accepted','declined','cancelled'))
@@ -29,16 +29,19 @@ with check(
   )
 );"""
 
-if new in schema:
-    print('Friend request update policy already consolidated; nothing to change')
+policy_marker = 'create policy "participants can update friend requests" on public.friend_requests for update to authenticated'
+if policy_marker in schema:
+    # Newer patches intentionally harden the USING expression (for example, requiring
+    # a receiver to act only while the request is pending). Do not downgrade them.
+    print('Friend request update policy already consolidated or hardened; nothing to change')
 elif old in schema:
-    schema = schema.replace(old, new, 1)
+    schema = schema.replace(old, consolidated, 1)
     changed = True
 else:
     raise SystemExit('friend request update policy anchor not found')
 
 for marker in [
-    'create policy "participants can update friend requests"',
+    policy_marker,
     "receiver_id=(select auth.uid()) and status in ('accepted','declined')",
     "sender_id=(select auth.uid()) and status in ('accepted','declined','cancelled')",
 ]:
