@@ -34,7 +34,18 @@ jobs:
         with:
           node-version: '24'
       - name: Apply patch pipeline
-        run: python scripts/run_patch_pipeline.py
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/run_patch_pipeline.py 2>&1 | tee autonomous-patch.log
+      - name: Preserve patch diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autonomous-patch-diagnostics-${{ github.run_id }}
+          path: autonomous-patch.log
+          if-no-files-found: warn
+          retention-days: 7
       - name: Check JavaScript syntax
         run: node --check src/main.js
       - name: Install locked dependencies
