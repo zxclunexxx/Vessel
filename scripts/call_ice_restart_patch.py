@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Direct-call recovery patch: only the original caller initiates ICE restart to avoid negotiation glare.
 path = Path('src/main.js')
 text = path.read_text(encoding='utf-8')
 changed = False
