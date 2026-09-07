@@ -5,14 +5,33 @@ schema = path.read_text(encoding='utf-8')
 changed = False
 
 
+def dm_thread_rpc_is_hardened():
+    marker = 'create or replace function public.vessel_dm_threads()'
+    start = schema.find(marker)
+    if start < 0:
+        return False
+    end = schema.find('$$;', start)
+    if end < 0:
+        return False
+    block = schema[start:end + 3]
+    return 'security invoker' in block
+
+
 def replace_once(old, new, label):
     global schema, changed
     if new in schema:
+        print(f'{label}: already applied')
+        return
+    # Newer patches may legitimately extend vessel_dm_threads() (for example with
+    # soft-delete filtering) while preserving the SECURITY INVOKER hardening.
+    if label == 'DM thread security invoker' and dm_thread_rpc_is_hardened():
+        print(f'{label}: already applied in newer RPC form')
         return
     if old not in schema:
         raise SystemExit(f'{label} anchor not found')
     schema = schema.replace(old, new, 1)
     changed = True
+    print(f'{label}: applied')
 
 
 # Now that profile.email is protected by column-level grants, users with an existing DM history
