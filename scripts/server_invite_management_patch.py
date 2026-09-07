@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Owner-facing invite management: list, copy and revoke only invites for the active owned server.
 path = Path('src/main.js')
 text = path.read_text(encoding='utf-8')
 changed = False
