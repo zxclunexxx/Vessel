@@ -49,6 +49,7 @@ let callSignalReconnectAttempt = 0;
 /* VESSEL_UI_VOICE_CALLS_V1 */
 let callStartedAt = 0;
 let callUiTicker = null;
+let rtcVisualRuntimeTicker = null;
 const rtcSpeakingMeters = new Map();
 let activeServerIndex = 0;
 let activeServerId = localStorage.getItem('vesselActiveServerId') || null;
@@ -163,6 +164,25 @@ function syncRtcVisualRuntime(){
   const expected=new Map();if(callStream)expected.set('call-self',callStream);if(remoteCallStream)expected.set('call-peer',remoteCallStream);if(voiceStream&&savedUser?.id)expected.set(`voice-${savedUser.id}`,voiceStream);for(const [peerId,state] of voicePeers){const stream=state.audio?.srcObject;if(stream)expected.set(`voice-${peerId}`,stream);}for(const [key,meter] of [...rtcSpeakingMeters])if(!expected.has(key)||expected.get(key)!==meter.stream)stopSpeakingMeter(key);for(const [key,stream] of expected)watchSpeakingStream(stream,key);syncCallUiTicker(Boolean(callConnection||callStream));
   const callStage=document.querySelector('[data-call-stage]');if(callStage){callStage.querySelectorAll('[data-call-state-label]').forEach(node=>node.textContent=callVisualLabel());const remote=document.querySelector('#remote-video'),placeholder=callStage.querySelector('.video-placeholder');if(remote)remote.classList.toggle('hidden',!remoteCallStream);if(placeholder)placeholder.classList.toggle('hidden',Boolean(remoteCallStream));}
   const voiceStage=document.querySelector('[data-voice-stage]');if(voiceStage)voiceStage.querySelectorAll('[data-voice-state-label]').forEach(node=>node.textContent=voiceVisualLabel());
+  syncRtcVisualRuntimeTicker();
+}
+function rtcVisualRuntimeActive(){return Boolean(callConnection||callStream||voiceStream||voiceRoom||voiceReconnectContext);}
+function runRtcVisualRuntimeTick(){
+  if(!rtcVisualRuntimeActive()){syncRtcVisualRuntimeTicker(false);return;}
+  const callStage=document.querySelector('[data-call-stage]');
+  if(callStage&&callStage.dataset.state!==callVisualState()){render();return;}
+  const voiceStage=document.querySelector('[data-voice-stage]');
+  if(voiceStage&&voiceStage.dataset.state!==voiceVisualState()){render();return;}
+  syncRtcVisualRuntime();
+  const video=document.querySelector('#local-video');
+  const stream=callStream||voiceStream;
+  if(video&&stream&&video.srcObject!==stream){video.srcObject=stream;video.play().catch(()=>{});}
+  const remote=document.querySelector('#remote-video');
+  if(remote&&remoteCallStream&&remote.srcObject!==remoteCallStream){remote.srcObject=remoteCallStream;remote.play().catch(()=>{});}
+}
+function syncRtcVisualRuntimeTicker(active=rtcVisualRuntimeActive()){
+  if(!active){if(rtcVisualRuntimeTicker){clearInterval(rtcVisualRuntimeTicker);rtcVisualRuntimeTicker=null;}return;}
+  if(!rtcVisualRuntimeTicker)rtcVisualRuntimeTicker=setInterval(runRtcVisualRuntimeTick,500);
 }
 function vesselDialog({title,message='',input=false,value='',placeholder='',choices=[]}) {
   return new Promise(resolve=>{
@@ -1694,6 +1714,7 @@ function resetAuthenticatedRuntime() {
   resetRtcConfiguration();
   stopSpeakingMeters();
   syncCallUiTicker(false);
+  syncRtcVisualRuntimeTicker(false);
   callStartedAt=0;
   dmMessagesSyncRevision++;
   const channels=[...(window.__vesselRealtimeChannels||[]),voiceRoom,callChannel,callInboxChannel].filter(Boolean);
@@ -1983,6 +2004,8 @@ async function verifyChannelAccess(user,channelId,{notify=true}={}){
 }
 function render() {
   document.body.classList.remove('mobile-drawer-open');
+  document.querySelector('.mobile-drawer-scrim')?.remove();
+  document.body.classList.remove('mobile-drawer-open');
   const previousMessagesPane=document.querySelector('.messages');
   const previousMessageContext=lastRenderedMessageContext;
   const previousMessageScroll=previousMessagesPane?{
@@ -2250,7 +2273,7 @@ function render() {
         activeDmId=peerId;
         friendsOpen=false;
         window.__vesselDmLoaded=false;
-        document.querySelector('.channels')?.classList.remove('mobile-open');
+        setMobileDrawerOpen(false);
         render();
         await markDirectMessageNotificationsRead(user,peerId);
         return;
@@ -2261,7 +2284,7 @@ function render() {
         activeDmId=null;
         dmMessages=[];
         window.__vesselDmLoaded=false;
-        document.querySelector('.channels')?.classList.remove('mobile-open');
+        setMobileDrawerOpen(false);
         render();
       }
     };
@@ -2279,7 +2302,22 @@ function render() {
     }
   });
   const modal = document.querySelector('#settings-modal');
-  document.querySelector('#profile-settings').addEventListener('click', () => modal.classList.remove('hidden'));
+  let settingsReturnFocus=null;
+  const openSettingsModal=trigger=>{
+    settingsReturnFocus=trigger||document.activeElement;
+    modal.classList.remove('hidden');
+    requestAnimationFrame(()=>modal.querySelector('input,select,button')?.focus());
+  };
+  const closeSettingsModal=()=>{
+    modal.classList.add('hidden');
+    if(settingsReturnFocus?.isConnected&&typeof settingsReturnFocus.focus==='function')settingsReturnFocus.focus();
+    settingsReturnFocus=null;
+  };
+  modal.setAttribute('role','dialog');
+  modal.setAttribute('aria-modal','true');
+  modal.addEventListener('click',event=>{if(event.target===modal)closeSettingsModal();});
+  modal.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();closeSettingsModal();}});
+  document.querySelector('#profile-settings').addEventListener('click', event => openSettingsModal(event.currentTarget));
   const setMobileDrawerOpen=open=>{
     const channels=document.querySelector('.channels');
     const next=Boolean(open&&channels);
@@ -2392,7 +2430,7 @@ function render() {
     }
   });
   document.querySelector('#dm-add').addEventListener('click', () => findAndRequestFriend(user));
-  document.querySelector('#close-settings').addEventListener('click', () => modal.classList.add('hidden'));
+  document.querySelector('#close-settings').addEventListener('click', closeSettingsModal);
   document.querySelector('#settings-form').addEventListener('submit', async e => {
     e.preventDefault();
     const data=new FormData(e.currentTarget);
@@ -2407,7 +2445,7 @@ function render() {
     }
     savedUser={...user,name:updated?.username||name,status:updated?.status||status,avatarColor:updated?.avatar_color||user.avatarColor};
     localStorage.setItem('vesselUser',JSON.stringify(savedUser));
-    modal.classList.add('hidden');
+    closeSettingsModal();
     vesselNotice('Профиль сохранён.','success');
     render();
   });
@@ -2452,13 +2490,13 @@ function render() {
     activeChannelName=name;
     activeChannelKind=kind;
     messages=[];
-    document.querySelector('.channels')?.classList.remove('mobile-open');
+    setMobileDrawerOpen(false);
     if(kind==='text')await loadChannelMessages(channelId);else render();
   }));
   const openFriendsHome=()=>{friendsOpen=true;currentDm=null;activeDmId=null;dmMessages=[];window.__vesselDmLoaded=false;render();};
   document.querySelector('#friends-tab').addEventListener('click',openFriendsHome);
   document.querySelector('#friends-button').addEventListener('click',openFriendsHome);
-  document.querySelector('#head-settings').addEventListener('click',()=>modal.classList.remove('hidden'));
+  document.querySelector('#head-settings').addEventListener('click',event=>openSettingsModal(event.currentTarget));
   document.querySelectorAll('[data-manage-member]').forEach(button=>button.addEventListener('click',async()=>{
     const server=getActiveServer();
     if(!supabase||!user.id||server?.role!=='owner')return;
@@ -2601,15 +2639,4 @@ function render() {
 const authStateSubscription=supabase?.auth.onAuthStateChange((event,session)=>handleAuthStateChange(event,session)).data?.subscription||null;
 window.addEventListener('beforeunload',()=>authStateSubscription?.unsubscribe());
 bootstrapAuth().then(render).catch(error=>{console.error('Vessel bootstrap failed',error);const staleChannels=resetAuthenticatedRuntime();render();cleanupAuthenticatedChannels(staleChannels).catch(()=>{});});
-setInterval(()=>{
-  const callStage=document.querySelector('[data-call-stage]');
-  if(callStage&&callStage.dataset.state!==callVisualState()){render();return;}
-  const voiceStage=document.querySelector('[data-voice-stage]');
-  if(voiceStage&&voiceStage.dataset.state!==voiceVisualState()){render();return;}
-  syncRtcVisualRuntime();
-  const video=document.querySelector('#local-video');
-  const stream=callStream||voiceStream;
-  if(video&&stream&&video.srcObject!==stream){video.srcObject=stream;video.play().catch(()=>{});}
-  const remote=document.querySelector('#remote-video');
-  if(remote&&remoteCallStream&&remote.srcObject!==remoteCallStream){remote.srcObject=remoteCallStream;remote.play().catch(()=>{});}
-},500);
+/* VESSEL_FULL_QA_INTERACTION_PERF_V1 */
