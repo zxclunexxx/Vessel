@@ -1261,6 +1261,10 @@ function resetAuthenticatedRuntime() {
   callOffer=null;
   callVideo=false;
   callAccepted=false;
+  callInitiator=false;
+  callIceRestartAttempts=0;
+  callIceRestartInFlight=false;
+  clearCallDisconnectTimer();
   pendingIceCandidates=[];
   localIceCandidates=[];
   if(callInviteTimer){clearTimeout(callInviteTimer);callInviteTimer=null;}
