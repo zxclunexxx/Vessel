@@ -48,6 +48,7 @@ let dmMessages = [];
 let notifications = [];
 let notificationsSyncRevision = 0;
 let serverMembers = [];
+let lastRenderedMessageContext = null;
 function escapeHtml(value='') {
   return String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 }
@@ -1355,7 +1356,14 @@ async function verifyChannelAccess(user,channelId,{notify=true}={}){
   return false;
 }
 function render() {
+  const previousMessagesPane=document.querySelector('.messages');
+  const previousMessageContext=lastRenderedMessageContext;
+  const previousMessageScroll=previousMessagesPane?{
+    top:previousMessagesPane.scrollTop,
+    atBottom:(previousMessagesPane.scrollHeight-previousMessagesPane.scrollTop-previousMessagesPane.clientHeight)<80
+  }:null;
   if (!savedUser) {
+    lastRenderedMessageContext=null;
     document.querySelector('#app').innerHTML = `
       <main class="auth-page"><div class="auth-glow"></div><section class="auth-card">
         <div class="auth-logo">◈</div><h1>Добро пожаловать<br><span>в Vessel</span></h1>
@@ -1412,6 +1420,11 @@ function render() {
     return;
   }
   const user = savedUser;
+  const currentMessageContext=friendsOpen
+    ? `user:${user.id}:friends`
+    : activeDmId
+      ? `user:${user.id}:dm:${activeDmId}`
+      : `user:${user.id}:channel:${activeChannelId||'none'}:${activeChannelKind}`;
   connectSupabaseRealtime(user); ensureCallInbox(user).catch(()=>{}); syncSupabaseMessages(); syncSupabaseServers(user); const selectedServer=getActiveServer(); if(selectedServer){syncSupabaseChannels(selectedServer);syncServerMembers(user,selectedServer);} syncSocial(user); syncDmThreads(user); syncNotifications(user); if (activeDmId && callConnection) { ensureCallChannel(user,activeDmId).catch(()=>{}); } if (activeDmId && !window.__vesselDmLoaded) { window.__vesselDmLoaded=true; loadDirectMessages(user,activeDmId); }
   const callInProgress=Boolean(callConnection||callStream);
   const activeDmIsFriend=Boolean(activeDmId&&friends.some(friend=>friend.id===activeDmId));
@@ -1448,6 +1461,19 @@ function render() {
       </section>
       <aside class="members">${friendsOpen?`<div class="members-title">ДРУЗЬЯ — ${friends.length}</div><div class="dm-empty">${friendRequests.length?`Входящих заявок: ${friendRequests.length}`:outgoingFriendRequests.length?`Исходящих заявок: ${outgoingFriendRequests.length}`:'Выбери друга, чтобы открыть личный чат.'}</div>`:`${voiceStream?`<div class="voice-status">🎙 В голосовой комнате: ${Math.max(1,voiceParticipants.length)}</div>`:''}${membersList}`}</aside>
     </main><div class="modal hidden" id="settings-modal"><div class="modal-card"><button class="modal-close" id="close-settings">×</button><h2>Настройки профиля</h2><p>Измени данные, которые видят другие участники Vessel.</p><form id="settings-form"><label>Имя пользователя<input name="name" value="${escapeHtml(user.name)}" required minlength="2" maxlength="32" /></label><label>Статус<select name="status"><option value="online" ${['online','В сети'].includes(user.status)?'selected':''}>В сети</option><option value="dnd" ${['dnd','Не беспокоить'].includes(user.status)?'selected':''}>Не беспокоить</option><option value="away" ${['away','Отошёл'].includes(user.status)?'selected':''}>Отошёл</option></select></label><button class="primary" type="submit">Сохранить изменения</button></form><button class="danger" id="logout" type="button">Выйти из аккаунта</button></div></div>${incomingCall?`<div class="modal call-modal" id="incoming-call-modal"><div class="modal-card"><div class="call-avatar">${escapeHtml(incomingCall.name?.[0]?.toUpperCase()||'?')}</div><h2>${incomingCall.video?'Видеозвонок':'Аудиозвонок'}</h2><p>${escapeHtml(incomingCall.name)} звонит тебе в Vessel.</p><div class="call-actions"><button class="danger" id="reject-call" type="button">Отклонить</button><button class="primary" id="accept-call" type="button">Принять</button></div></div></div>`:''}`;
+  const nextMessagesPane=document.querySelector('.messages');
+  if(nextMessagesPane){
+    const contextChanged=previousMessageContext!==currentMessageContext;
+    if(contextChanged||!previousMessageScroll||previousMessageScroll.atBottom){
+      requestAnimationFrame(()=>{
+        if(nextMessagesPane.isConnected)nextMessagesPane.scrollTop=nextMessagesPane.scrollHeight;
+      });
+    }else{
+      const maxTop=Math.max(0,nextMessagesPane.scrollHeight-nextMessagesPane.clientHeight);
+      nextMessagesPane.scrollTop=Math.min(previousMessageScroll.top,maxTop);
+    }
+  }
+  lastRenderedMessageContext=currentMessageContext;
   document.querySelector('.composer').addEventListener('submit', async e => {
     e.preventDefault();
     const input=e.currentTarget.querySelector('input');
