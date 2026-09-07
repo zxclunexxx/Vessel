@@ -20,6 +20,8 @@ jobs:
           node-version: '24'
       - name: Authenticated runtime smoke check
         run: python scripts/runtime_smoke_check_current.py
+      - name: Logout/session cleanup smoke check
+        run: python scripts/logout_session_smoke_check.py
       - name: Realtime auth-session isolation smoke check
         run: python scripts/realtime_session_smoke_check.py
       - name: Private Realtime signaling security smoke check
