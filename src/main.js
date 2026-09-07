@@ -53,8 +53,12 @@ let dmThreadsSyncRevision = 0;
 let friendRequests = [];
 let outgoingFriendRequests = [];
 let dmMessages = [];
+let dmMessagesSyncRevision = 0;
 let notifications = [];
 let notificationsSyncRevision = 0;
+let dataRealtimeReconnectTimer = null;
+let dataRealtimeReconnectAttempt = 0;
+let dataRealtimeRecoveryInFlight = false;
 let serverMembers = [];
 let lastRenderedMessageContext = null;
 function escapeHtml(value='') {
@@ -248,12 +252,21 @@ async function findAndRequestFriend(user) {
   }
   const outgoing=requests.find(request=>request.sender_id===user.id&&request.receiver_id===target.id);
   let sendError=null;
+  let sentRequest=null;
   if(outgoing&&['accepted','declined','cancelled'].includes(outgoing.status)){
-    const result=await supabase.from('friend_requests').update({status:'pending',updated_at:new Date().toISOString()}).eq('id',outgoing.id).eq('sender_id',user.id).in('status',['accepted','declined','cancelled']);
+    const result=await supabase.from('friend_requests').update({status:'pending',updated_at:new Date().toISOString()}).eq('id',outgoing.id).eq('sender_id',user.id).in('status',['accepted','declined','cancelled']).select('id,status').maybeSingle();
     sendError=result.error;
+    sentRequest=result.data;
+    if(!sendError&&!sentRequest){
+      window.__vesselSocialLoaded=false;
+      await syncSocial(user);
+      vesselNotice('Состояние заявки уже изменилось. Список друзей обновлён.');
+      return;
+    }
   }else{
-    const result=await supabase.from('friend_requests').insert({sender_id:user.id,receiver_id:target.id,status:'pending'});
+    const result=await supabase.from('friend_requests').insert({sender_id:user.id,receiver_id:target.id,status:'pending'}).select('id,status').single();
     sendError=result.error;
+    sentRequest=result.data;
   }
   if(sendError){
     if(sendError.code==='23505'){
@@ -339,11 +352,11 @@ async function markDirectMessageNotificationsRead(user,peerId,notificationId=nul
 async function loadDirectMessages(user, friendId) {
   if (!supabase || !user?.id || !friendId) return;
   const dmLoadUserId=user.id;
+  const revision=++dmMessagesSyncRevision;
   if(savedUser?.id!==dmLoadUserId)return;
   const {data,error} = await supabase.from('direct_messages').select('id,sender_id,receiver_id,body,attachments,created_at,edited_at,deleted_at,profiles!direct_messages_sender_id_fkey(username,avatar_color)').or(`and(sender_id.eq.${dmLoadUserId},receiver_id.eq.${friendId}),and(sender_id.eq.${friendId},receiver_id.eq.${dmLoadUserId})`).is('deleted_at',null).order('created_at',{ascending:false}).limit(100);
-  if(savedUser?.id!==dmLoadUserId||activeDmId!==friendId)return;
-  if(activeDmId!==friendId)return;
-  if(error){vesselNotice('Не удалось загрузить личные сообщения.','error');return;}
+  if(savedUser?.id!==dmLoadUserId||revision!==dmMessagesSyncRevision||activeDmId!==friendId)return;
+  if(error){window.__vesselDmLoaded=false;vesselNotice('Не удалось загрузить личные сообщения.','error');return;}
   dmMessages = (data || []).reverse().map(row => ({id:row.id,authorId:row.sender_id,name:row.profiles?.username || 'Пользователь',time:new Date(row.created_at).toLocaleString('ru-RU'),editedAt:row.edited_at||null,color:row.profiles?.avatar_color || '#8b7cff',text:row.body,attachments:row.attachments||[]}));
   render();
 }
@@ -1108,6 +1121,45 @@ function serverChannels() {
 }
 
 let messages = [];
+function clearDataRealtimeRecovery(){
+  if(dataRealtimeReconnectTimer){clearTimeout(dataRealtimeReconnectTimer);dataRealtimeReconnectTimer=null;}
+  dataRealtimeReconnectAttempt=0;
+  dataRealtimeRecoveryInFlight=false;
+}
+function handleDataRealtimeStatus(user,status){
+  if(savedUser?.id!==user?.id||dataRealtimeRecoveryInFlight)return;
+  if(['CHANNEL_ERROR','TIMED_OUT','CLOSED'].includes(status))scheduleDataRealtimeRecovery(user,status);
+}
+function scheduleDataRealtimeRecovery(user,status='CHANNEL_ERROR'){
+  if(!supabase||!user?.id||savedUser?.id!==user.id||dataRealtimeReconnectTimer||dataRealtimeRecoveryInFlight)return;
+  const sessionUserId=user.id;
+  dataRealtimeReconnectAttempt=Math.min(dataRealtimeReconnectAttempt+1,5);
+  const attempt=dataRealtimeReconnectAttempt;
+  const delay=Math.min(1000*(2**(attempt-1)),10000);
+  console.warn(`Data Realtime ${status}; recovery attempt ${attempt} scheduled`);
+  dataRealtimeReconnectTimer=setTimeout(async()=>{
+    dataRealtimeReconnectTimer=null;
+    if(savedUser?.id!==sessionUserId)return;
+    dataRealtimeRecoveryInFlight=true;
+    const stale=window.__vesselRealtimeChannels||[];
+    window.__vesselRealtimeChannels=null;
+    try{
+      if(stale.length)await Promise.allSettled(stale.map(channel=>supabase.removeChannel(channel)));
+    }finally{
+      dataRealtimeRecoveryInFlight=false;
+    }
+    if(savedUser?.id!==sessionUserId)return;
+    window.__vesselSocialLoaded=false;
+    window.__vesselDmThreadsLoaded=false;
+    window.__vesselNotificationsLoaded=false;
+    if(activeDmId)window.__vesselDmLoaded=false;
+    connectSupabaseRealtime(user);
+    const refreshes=[syncSocial(user),syncDmThreads(user),syncNotifications(user)];
+    if(activeDmId)refreshes.push(loadDirectMessages(user,activeDmId));
+    await Promise.allSettled(refreshes);
+    if(savedUser?.id===sessionUserId)dataRealtimeReconnectAttempt=0;
+  },delay);
+}
 function connectSupabaseRealtime(user) {
   if (!supabase || !user?.id || window.__vesselRealtimeChannels) return;
   window.__vesselRealtimeChannels = [
@@ -1128,9 +1180,9 @@ function connectSupabaseRealtime(user) {
       window.__vesselDmThreadsLoaded=false;
       syncDmThreads(user).catch(error=>console.warn('DM thread realtime refresh failed',error));
       if(activeDmId && (row.sender_id===activeDmId || row.receiver_id===activeDmId)){ window.__vesselDmLoaded=false; loadDirectMessages(user,activeDmId); }
-    }).subscribe(),
-    supabase.channel(`vessel-friends-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friend_requests',filter:`receiver_id=eq.${user.id}`},()=>{if(savedUser?.id!==user.id)return;window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),
-    supabase.channel(`vessel-friend-requests-out-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friend_requests',filter:`sender_id=eq.${user.id}`},()=>{if(savedUser?.id!==user.id)return;window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(),
+    }).subscribe(status=>handleDataRealtimeStatus(user,status)),
+    supabase.channel(`vessel-friends-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friend_requests',filter:`receiver_id=eq.${user.id}`},()=>{if(savedUser?.id!==user.id)return;window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(status=>handleDataRealtimeStatus(user,status)),
+    supabase.channel(`vessel-friend-requests-out-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friend_requests',filter:`sender_id=eq.${user.id}`},()=>{if(savedUser?.id!==user.id)return;window.__vesselSocialLoaded=false;syncSocial(user);}).subscribe(status=>handleDataRealtimeStatus(user,status)),
     supabase.channel(`vessel-friendships-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'friendships',filter:`user_id=eq.${user.id}`},async payload=>{
       if(savedUser?.id!==user.id)return;
       const row=payload.new?.friend_id?payload.new:payload.old;
@@ -1140,7 +1192,7 @@ function connectSupabaseRealtime(user) {
       }
       window.__vesselSocialLoaded=false;
       syncSocial(user);
-    }).subscribe(),
+    }).subscribe(status=>handleDataRealtimeStatus(user,status)),
     supabase.channel(`vessel-memberships-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'server_members'},async payload=>{
       if(savedUser?.id!==user.id)return;
       const row=payload.new?.server_id?payload.new:payload.old;
@@ -1157,14 +1209,14 @@ function connectSupabaseRealtime(user) {
         const active=getActiveServer();
         if(active?.dbId===row.server_id){window.__vesselMembersServerId=null;serverMembers=[];syncServerMembers(user,active);}
       }
-    }).subscribe(),
+    }).subscribe(status=>handleDataRealtimeStatus(user,status)),
     supabase.channel(`vessel-channels-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'channels'},async payload=>{
       if(savedUser?.id!==user.id)return;
       const row=payload.new?.server_id?payload.new:payload.old;
       if(payload.eventType==='DELETE'&&voiceStream&&row?.id===voiceChannelId)await leaveVoiceRoom();
       const active=getActiveServer();
       if(row?.server_id&&active?.dbId===row.server_id){active.__channelsLoaded=false;syncSupabaseChannels(active);}
-    }).subscribe(),
+    }).subscribe(status=>handleDataRealtimeStatus(user,status)),
     supabase.channel(`vessel-channel-messages-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'messages'},payload=>{
       if(savedUser?.id!==user.id)return;
       if(payload.eventType==='DELETE'){
@@ -1174,7 +1226,7 @@ function connectSupabaseRealtime(user) {
       }
       const row=payload.new;
       if(row?.channel_id===activeChannelId)loadChannelMessages(activeChannelId).catch(error=>console.warn('Message refresh failed',error));
-    }).subscribe(),
+    }).subscribe(status=>handleDataRealtimeStatus(user,status)),
     supabase.channel(`vessel-profiles-${user.id}`).on('postgres_changes',{event:'UPDATE',schema:'public',table:'profiles'},payload=>{
       if(savedUser?.id!==user.id)return;
       const row=payload.new;
@@ -1186,7 +1238,7 @@ function connectSupabaseRealtime(user) {
       const member=serverMembers.find(item=>item.id===row.id);if(member){member.username=row.username||member.username;member.status=row.status||member.status;member.avatar_color=row.avatar_color||member.avatar_color;dirty=true;}
       if(activeDmId===row.id&&row.username){currentDm=row.username;dirty=true;}
       if(dirty)render();
-    }).subscribe(),
+    }).subscribe(status=>handleDataRealtimeStatus(user,status)),
     supabase.channel(`vessel-servers-${user.id}`).on('postgres_changes',{event:'*',schema:'public',table:'servers'},async payload=>{
       if(savedUser?.id!==user.id)return;
       const row=payload.new?.id?payload.new:payload.old;
@@ -1204,7 +1256,7 @@ function connectSupabaseRealtime(user) {
       server.name=row.name||server.name;
       server.icon=row.icon||server.icon;
       render();
-    }).subscribe(),
+    }).subscribe(status=>handleDataRealtimeStatus(user,status)),
     supabase.channel(`vessel-notifications-${user.id}`)
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`},async payload=>{
         if(savedUser?.id!==user.id)return;
@@ -1227,7 +1279,7 @@ function connectSupabaseRealtime(user) {
         notifications=notifications.map(item=>item.id===row.id?{...item,...row}:item);
         render();
       })
-      .subscribe()
+      .subscribe(status=>handleDataRealtimeStatus(user,status))
   ];
 }
 
@@ -1235,6 +1287,8 @@ let savedUser = null;
 let authStateSyncTimer = null;
 
 function resetAuthenticatedRuntime() {
+  clearDataRealtimeRecovery();
+  dmMessagesSyncRevision++;
   const channels=[...(window.__vesselRealtimeChannels||[]),voiceRoom,callChannel,callInboxChannel].filter(Boolean);
   window.__vesselRealtimeChannels=null;
   voiceRoom=null;
@@ -2009,8 +2063,14 @@ function render() {
     if(!await vesselConfirm(`Удалить ${friend?.username||'пользователя'} из друзей?`))return;
     if(incomingCall?.from===friendId){incomingCall=null;render();}
     if(callPeer===friendId)await endCall(false);
-    const {error}=await supabase.from('friendships').delete().or(`and(user_id.eq.${user.id},friend_id.eq.${friendId}),and(user_id.eq.${friendId},friend_id.eq.${user.id})`);
+    const {data:removed,error}=await supabase.from('friendships').delete().or(`and(user_id.eq.${user.id},friend_id.eq.${friendId}),and(user_id.eq.${friendId},friend_id.eq.${user.id})`).select('user_id,friend_id');
     if(error){vesselNotice(`Не удалось удалить друга: ${error.message}`,'error');return;}
+    if(!removed?.length){
+      window.__vesselSocialLoaded=false;
+      await syncSocial(user);
+      vesselNotice('Пользователь уже удалён из друзей. Список обновлён.');
+      return;
+    }
     const keepActiveHistory=activeDmId===friendId;
     if(keepActiveHistory)window.__vesselDmLoaded=false;
     window.__vesselSocialLoaded=false;
@@ -2021,14 +2081,35 @@ function render() {
   document.querySelectorAll('[data-cancel-request]').forEach(button=>button.addEventListener('click',async()=>{
     if(!supabase||!user.id)return;
     const requestId=button.dataset.cancelRequest;
-    const {error}=await supabase.from('friend_requests').delete().eq('id',requestId).eq('sender_id',user.id).eq('status','pending');
+    const {data:cancelled,error}=await supabase.from('friend_requests').delete().eq('id',requestId).eq('sender_id',user.id).eq('status','pending').select('id');
     if(error){vesselNotice('Не удалось отменить заявку.','error');return;}
     window.__vesselSocialLoaded=false;
     await syncSocial(user);
+    if(!cancelled?.some(row=>row.id===requestId)){vesselNotice('Заявка уже была обработана. Список обновлён.');return;}
     vesselNotice('Заявка отменена.','success');
   }));
-  document.querySelectorAll('[data-accept-request]').forEach(button=>button.addEventListener('click',async()=>{if(!supabase||!user.id)return;const {error}=await supabase.from('friend_requests').update({status:'accepted',updated_at:new Date().toISOString()}).eq('id',button.dataset.acceptRequest).eq('receiver_id',user.id);if(error){vesselNotice('Не удалось принять заявку.','error');return;}else vesselNotice('Заявка принята.','success');window.__vesselSocialLoaded=false;await syncSocial(user);render();}));
-  document.querySelectorAll('[data-decline-request]').forEach(button=>button.addEventListener('click',async()=>{if(!supabase||!user.id)return;const {error}=await supabase.from('friend_requests').update({status:'declined',updated_at:new Date().toISOString()}).eq('id',button.dataset.declineRequest).eq('receiver_id',user.id);if(error){vesselNotice('Не удалось отклонить заявку.','error');return;}else vesselNotice('Заявка отклонена.');window.__vesselSocialLoaded=false;await syncSocial(user);render();}));
+  document.querySelectorAll('[data-accept-request]').forEach(button=>button.addEventListener('click',async()=>{
+    if(!supabase||!user.id)return;
+    const requestId=button.dataset.acceptRequest;
+    const {data:accepted,error}=await supabase.from('friend_requests').update({status:'accepted',updated_at:new Date().toISOString()}).eq('id',requestId).eq('receiver_id',user.id).eq('status','pending').select('id,status').maybeSingle();
+    if(error){vesselNotice('Не удалось принять заявку.','error');return;}
+    window.__vesselSocialLoaded=false;
+    await syncSocial(user);
+    if(!accepted){vesselNotice('Заявка уже была обработана. Список обновлён.');return;}
+    vesselNotice('Заявка принята.','success');
+    render();
+  }));
+  document.querySelectorAll('[data-decline-request]').forEach(button=>button.addEventListener('click',async()=>{
+    if(!supabase||!user.id)return;
+    const requestId=button.dataset.declineRequest;
+    const {data:declined,error}=await supabase.from('friend_requests').update({status:'declined',updated_at:new Date().toISOString()}).eq('id',requestId).eq('receiver_id',user.id).eq('status','pending').select('id,status').maybeSingle();
+    if(error){vesselNotice('Не удалось отклонить заявку.','error');return;}
+    window.__vesselSocialLoaded=false;
+    await syncSocial(user);
+    if(!declined){vesselNotice('Заявка уже была обработана. Список обновлён.');return;}
+    vesselNotice('Заявка отклонена.');
+    render();
+  }));
   document.querySelector('#add-friend')?.addEventListener('click',()=>findAndRequestFriend(user));
   document.querySelector('#audio-call')?.addEventListener('click',()=>startCall(false,user));
   document.querySelector('#video-call')?.addEventListener('click',()=>startCall(true,user));

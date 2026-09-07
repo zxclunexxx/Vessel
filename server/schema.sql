@@ -728,7 +728,7 @@ create or replace function public.vessel_dm_threads()
 returns table(peer_id uuid, username text, avatar_color text, status text, last_message_at timestamptz)
 language sql
 security invoker
-set search_path = public
+set search_path='pg_catalog','public'
 stable
 as $$
   with peer_messages as (
@@ -746,6 +746,5 @@ as $$
   join public.profiles p on p.id = pm.peer_id
   order by pm.last_message_at desc;
 $$;
-revoke all on function public.vessel_dm_threads() from public;
-revoke execute on function public.vessel_dm_threads() from anon;
+revoke all on function public.vessel_dm_threads() from public,anon;
 grant execute on function public.vessel_dm_threads() to authenticated;
