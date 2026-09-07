@@ -2005,7 +2005,7 @@ async function verifyChannelAccess(user,channelId,{notify=true}={}){
 function render() {
   document.body.classList.remove('mobile-drawer-open');
   document.querySelector('.mobile-drawer-scrim')?.remove();
-  document.body.classList.remove('mobile-drawer-open');
+  /* VESSEL_FULL_QA_CLEANUP_V1 */
   const previousMessagesPane=document.querySelector('.messages');
   const previousMessageContext=lastRenderedMessageContext;
   const previousMessageScroll=previousMessagesPane?{
